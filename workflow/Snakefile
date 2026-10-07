@@ -1,0 +1,91 @@
+from pathlib import Path
+
+configfile: "workflow/config.yaml"
+CTX = config["contexts"]
+H1 = [f"data/vcc2025/adata_{s}.h5ad" for s in ("Training", "Validation", "Test")]
+MAP_INPUTS = [H1[0], "data/vcc2026/gene_names.csv", "data/orion_probe/gene_metadata.parquet",
+              "data/raw/gse337988/low_rowdata.csv.gz", "data/raw/feng/GenomeWideScreen_LFC_byGene.tsv.gz"]
+PREP = {
+    "h1": ["data/vcc2025/validated.json"],
+    "feng": ["data/raw/feng/GW_Fitness_meta.tsv.gz", "data/raw/feng/GW_NonFitness_meta.tsv.gz"],
+    "dld1": ["data/raw/gse337988/low_coldata.csv.gz", "data/raw/gse337988/low_rowdata.csv.gz"],
+    "viperturb": ["data/raw/viperturb/genome_wide_manifest.txt"],
+    "orion": ["data/orion_probe/gene_metadata.parquet"],
+}
+
+rule all:
+    input:
+        expand("data/{context}.h5", context=CTX),
+        expand("data/{context}.json", context=CTX),
+
+rule prepare_h1:
+    input: "data/vcc2025/validated.json"
+
+rule download_h1:
+    output: "data/vcc2025/adata_{split}.h5ad"
+    wildcard_constraints: split="Training|Validation|Test"
+    threads: 1
+    resources: mem_mb_per_cpu=2000, runtime=1440, slurm_partition="normal.24h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py h1 --split {wildcards.split}"
+
+rule validate_h1:
+    input: H1
+    output: "data/vcc2025/validated.json"
+    threads: 1
+    resources: mem_mb_per_cpu=4000, runtime=60, slurm_partition="normal.4h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py validate-h1"
+
+rule vocabulary:
+    output: "data/vcc2026/gene_names.csv"
+    threads: 1
+    resources: mem_mb_per_cpu=1000, runtime=10, slurm_partition="normal.4h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py vocabulary"
+
+rule prepare_orion:
+    output: "data/orion_probe/gene_metadata.parquet"
+    threads: 1
+    resources: mem_mb_per_cpu=1000, runtime=30, slurm_partition="normal.4h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py orion"
+
+rule prepare_feng:
+    output: "data/raw/feng/GW_Fitness_meta.tsv.gz", "data/raw/feng/GW_NonFitness_meta.tsv.gz", "data/raw/feng/GenomeWideScreen_LFC_byGene.tsv.gz"
+    threads: 1
+    resources: mem_mb_per_cpu=2000, runtime=240, slurm_partition="normal.4h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py feng"
+
+rule prepare_dld1:
+    output: "data/raw/gse337988/low_coldata.csv.gz", "data/raw/gse337988/low_rowdata.csv.gz"
+    threads: 1
+    resources: mem_mb_per_cpu=16000, runtime=240, slurm_partition="normal.4h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py dld1"
+
+rule prepare_viperturb:
+    output: "data/raw/viperturb/genome_wide_manifest.txt"
+    threads: 1
+    resources: mem_mb_per_cpu=1000, runtime=30, slurm_partition="normal.4h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py viperturb"
+
+rule ensembl:
+    input: MAP_INPUTS
+    output: "data/vocab_ensembl.tsv"
+    threads: 1
+    resources: mem_mb_per_cpu=4000, runtime=240, slurm_partition="normal.4h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py ensembl"
+
+rule summarize:
+    wildcard_constraints:
+        context="|".join(CTX),
+    input:
+        vocabulary="data/vcc2026/gene_names.csv",
+        ensembl="data/vocab_ensembl.tsv",
+        source=lambda wc: PREP.get(CTX[wc.context]["reader"], []),
+    output: h5="data/{context}.h5", json="data/{context}.json"
+    log: "logs/stats/{context}.log"
+    threads: lambda wc: CTX[wc.context]["cpus"]
+    resources:
+        mem_mb_per_cpu=lambda wc: CTX[wc.context]["mem_mb"] // CTX[wc.context]["cpus"],
+        runtime=lambda wc: CTX[wc.context]["runtime"],
+        slurm_partition=lambda wc: "normal.4h" if CTX[wc.context]["runtime"] <= 240 else "normal.24h" if CTX[wc.context]["runtime"] <= 1440 else "normal.120h",
+        disk_slots=1,
+    shell:
+        "bash scripts/run_job.sh pixi run python -u src/clean/run.py --context {wildcards.context} > {log} 2>&1"

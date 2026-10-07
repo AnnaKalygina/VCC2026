@@ -1,0 +1,25 @@
+# data contexts: reader (src/clean/readers.py) + args + Slurm resources.
+# mem_mb: engine accumulators are ~84 B x targets x measured genes + the control pool; revised from measured peak RSS
+# (VIPerturb OOM at 48 GB, Orion 55-61 GB mid pass 2 -> 96 GB for the ~18k-target screens).
+contexts:
+  vcc2025__H1:            {reader: h1, mem_mb: 32000, runtime: 240, cpus: 4}
+  adamson__k562:          {reader: scperturb, args: {study: adamson, context: adamson__k562}, mem_mb: 16000, runtime: 240, cpus: 4}
+  frangieh__control:      {reader: scperturb, args: {study: frangieh, context: frangieh__control}, mem_mb: 32000, runtime: 240, cpus: 4}
+  frangieh__ifng:         {reader: scperturb, args: {study: frangieh, context: frangieh__ifng}, mem_mb: 32000, runtime: 240, cpus: 4}
+  frangieh__coculture:    {reader: scperturb, args: {study: frangieh, context: frangieh__coculture}, mem_mb: 32000, runtime: 240, cpus: 4}
+  feng_fit__hpsc:         {reader: feng, args: {screen: fit}, mem_mb: 32000, runtime: 720, cpus: 4}
+  feng_nonfit__hpsc:      {reader: feng, args: {screen: nonfit}, mem_mb: 32000, runtime: 720, cpus: 4}
+  gse337988__dld1:        {reader: dld1, args: {procs: 4}, mem_mb: 32000, runtime: 480, cpus: 4}
+  gse295214__hesc:        {reader: hesc, mem_mb: 32000, runtime: 480, cpus: 4}
+  viperturb__k562:        {reader: viperturb, mem_mb: 96000, runtime: 1440, cpus: 4}
+  orion__hct116:          {reader: orion, args: {line: HCT116, n_shards: 109}, mem_mb: 96000, runtime: 1440, cpus: 4}
+  orion__hek293t:         {reader: orion, args: {line: HEK293T, n_shards: 223}, mem_mb: 96000, runtime: 1440, cpus: 4}
+  replogle_gwps__k562:    {reader: remote_rows, args: {kind: figshare, ref: 20029387, name: K562_gwps_raw_singlecell_01.h5ad}, mem_mb: 32000, runtime: 720, cpus: 4}
+  replogle_nadig__k562:   {reader: remote_rows, args: {kind: figshare, ref: 20029387, name: K562_essential_raw_singlecell_01.h5ad}, mem_mb: 16000, runtime: 240, cpus: 4}
+  replogle_nadig__rpe1:   {reader: remote_rows, args: {kind: figshare, ref: 20029387, name: rpe1_raw_singlecell_01.h5ad}, mem_mb: 16000, runtime: 240, cpus: 4}
+  replogle_nadig__jurkat: {reader: remote_rows, args: {kind: url, ref: "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE264nnn/GSE264667/suppl/GSE264667_jurkat_raw_singlecell_01.h5ad"}, mem_mb: 16000, runtime: 240, cpus: 4}
+  replogle_nadig__hepg2:  {reader: remote_rows, args: {kind: url, ref: "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE264nnn/GSE264667/suppl/GSE264667_hepg2_raw_singlecell_01.h5ad"}, mem_mb: 16000, runtime: 240, cpus: 4}
+  kolf__hiPSC:            {reader: kolf, mem_mb: 48000, runtime: 1440, cpus: 4}
+  cd4t_marson2025__Rest:     {reader: cd4t, args: {cond: Rest}, mem_mb: 64000, runtime: 2880, cpus: 4}
+  cd4t_marson2025__Stim8hr:  {reader: cd4t, args: {cond: Stim8hr}, mem_mb: 64000, runtime: 2880, cpus: 4}
+  cd4t_marson2025__Stim48hr: {reader: cd4t, args: {cond: Stim48hr}, mem_mb: 64000, runtime: 2880, cpus: 4}

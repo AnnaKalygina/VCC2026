@@ -1,0 +1,11 @@
+executor: cluster-generic
+cluster-generic-submit-cmd: >-
+  sbatch --parsable -p {resources.slurm_partition} -c {threads}
+  --mem-per-cpu={resources.mem_mb_per_cpu} -t {resources.runtime}
+cluster-generic-status-cmd: scripts/slurm_status.sh
+cluster-generic-cancel-cmd: scancel
+jobs: 6
+resources:
+  disk_slots: 2
+latency-wait: 60
+max-status-checks-per-second: 0.2

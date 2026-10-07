@@ -1,0 +1,168 @@
+"""One context -> data/{context}.h5 + .json (provenance, QC counts, validation checks).
+
+    pixi run python -u src/clean/run.py --context vcc2025__H1
+"""
+import argparse
+import os
+import json
+import resource
+import sys
+import time
+from pathlib import Path
+
+import h5py
+import numpy as np
+import scipy.sparse as sp
+import yaml
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+sys.path.insert(0, str(HERE))
+from genes import GeneMap, load_vocab  # noqa: E402
+from readers import READERS  # noqa: E402
+from stats import MIN_UMI, Engine, write_h5  # noqa: E402
+
+T0 = time.time()
+
+
+def log(msg):
+    print(f"[{(time.time() - T0) / 60:6.1f} min] {msg}", flush=True)
+
+
+def canon_targets(raw, vocab):
+    """Target label -> vocab symbol (exact, else unique case-insensitive), else the label itself."""
+    vi = set(vocab)
+    up = {}
+    for g in vocab:
+        up.setdefault(g.upper(), []).append(g)
+    out = []
+    for t in raw:
+        if t in vi:
+            out.append(t)
+        elif len(up.get(t.upper(), [])) == 1:
+            out.append(up[t.upper()][0])
+        else:
+            out.append(t)
+    return np.array(out)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--context", required=True)
+    ap.add_argument("--config", default=str(ROOT / "workflow/config.yaml"))
+    ap.add_argument("--out", default=str(ROOT / "data"))
+    ap.add_argument("--seed", type=int, default=0)
+    a = ap.parse_args()
+    if not os.environ.get("SLURM_JOB_ID"):
+        ap.error("Real statistics processing requires Slurm")
+    os.chdir(ROOT)
+    cfg = yaml.safe_load(open(a.config))["contexts"][a.context]
+    vocab = load_vocab()
+    tmp = ROOT / "data/raw/_clean_tmp" / a.context            # staged raw files; deleted by src.cleanup()
+    src = READERS[cfg["reader"]](tmp=tmp, **cfg.get("args", {}))
+    gm = GeneMap(src.genes, src.ensembl, vocab, label=a.context)
+    qc = dict(ctrl_seen=0, ctrl_low_umi=0, pert_seen=0, pert_low_umi=0, pert_unlabelled=0)
+
+    if hasattr(src, "run_blocks"):
+        targets = canon_targets(np.asarray(src.targets), vocab)
+        utg, t_of = np.unique(targets, return_inverse=True)
+        eng = Engine(len(gm.measured_idx), len(utg), seed=a.seed)
+        src.run_blocks(eng, gm, t_of, qc, log)
+    else:
+        # pass 1: control pool (needed in full before any perturbed cell: MWU reference, control halves)
+        Xs, Ls = [], []
+        for k, X in enumerate(src.controls()):
+            if k % 5 == 0:
+                log(f"  pass 1: chunk {k}, {qc['ctrl_seen']:,} controls so far")
+            Xm = gm.apply(X)
+            L = np.asarray(Xm.sum(1)).ravel()
+            ok = L >= MIN_UMI
+            qc["ctrl_seen"] += len(L)
+            qc["ctrl_low_umi"] += int((~ok).sum())
+            Xs.append(Xm[np.flatnonzero(ok)].astype(np.float32))   # integer counts: exact in float32
+            Ls.append(L[ok])
+        Xc, Lc = sp.vstack(Xs, format="csr"), np.concatenate(Ls)
+        del Xs
+        log(f"controls: {Xc.shape[0]:,} kept of {qc['ctrl_seen']:,} ({qc['ctrl_low_umi']:,} < {MIN_UMI} UMI), "
+            f"median depth {np.median(Lc):,.0f}")
+        targets_raw = np.asarray(src.targets)
+        targets = canon_targets(targets_raw, vocab)
+        utg, inv = np.unique(targets, return_inverse=True)
+        t_of = dict(zip(targets_raw, inv))
+        eng = Engine(len(gm.measured_idx), len(utg), seed=a.seed)
+        eng.set_controls(Xc, Lc)
+        del Xc
+        log(f"engine: {len(utg):,} targets x {len(gm.measured_idx):,} genes")
+        # pass 2: perturbed cells
+        k = 0
+        for X, lab in src.cells():
+            Xm = gm.apply(X)
+            L = np.asarray(Xm.sum(1)).ravel()
+            g = np.array([t_of.get(t, -1) for t in lab], np.int64)
+            qc["pert_seen"] += len(L)
+            qc["pert_unlabelled"] += int((g < 0).sum())
+            low = L < MIN_UMI
+            qc["pert_low_umi"] += int((low & (g >= 0)).sum())
+            keep = np.flatnonzero(~low & (g >= 0))
+            if len(keep):
+                eng.add(Xm[keep], L[keep], g[keep])
+            k += 1
+            if k % 20 == 0:
+                log(f"  pass 2: {qc['pert_seen']:,} perturbed cells")
+    log(f"QC: {qc}")
+    sym = [src.target_symbol(t) for t in utg] if hasattr(src, "target_symbol") else list(utg)
+    own = gm.vocab_index(sym, vocab)                    # measured index of each target's own gene
+    res = eng.result(own)
+    del eng
+    keep_t = res["n_cells"] > 0
+    if hasattr(src, "post_result"):        # e.g. DLD1: one TSS group per gene
+        new_utg, idx = src.post_result(utg, res, own)
+        keep_t = np.zeros(len(utg), bool)
+        keep_t[idx] = True
+        keep_t &= res["n_cells"] > 0
+        utg = np.asarray(utg, object).copy()
+        utg[idx] = new_utg
+    if not keep_t.all():
+        print(f"WARNING: {(~keep_t).sum()} target groups dropped (0 cells after QC, or non-chosen TSS): "
+              f"{list(np.asarray(utg)[~keep_t][:20])}")
+        for k in ("mean_cpm", "lfc", "disp", "nlog10p", "reliability_r", "reliability_mean", "reliability_sb",
+                  "n_cells", "depth_mean", "depth_median"):
+            res[k] = res[k][keep_t]
+        utg = utg[keep_t]
+
+    # validation (fatal where a violation means a bug, not a data property)
+    c = res["control"]
+    chk = dict(ctrl_cpm_sum=float(np.nansum(c["mean_cpm"].astype(np.float64))),
+               pert_cpm_sum_minmax=[float(x) for x in np.percentile(np.nansum(res["mean_cpm"], 1), [0, 100])]
+               if len(utg) else None,
+               n_lfc_nonfinite=int((~np.isfinite(res["lfc"])).sum()),
+               n_nlog10p_nonfinite=int((~np.isfinite(res["nlog10p"])).sum()),
+               n_reliable_targets=int(np.isfinite(res["reliability_mean"]).sum()),
+               median_reliability_sb=float(np.nanmedian(res["reliability_sb"])) if np.isfinite(res["reliability_sb"]).any() else None)
+    assert abs(chk["ctrl_cpm_sum"] - 1e6) < 1e6 * 1e-4, chk
+    assert chk["n_lfc_nonfinite"] == 0 and chk["n_nlog10p_nonfinite"] == 0, chk
+    log(f"checks: {chk}")
+
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    attrs = dict(dataset=a.context.split("__")[0], context=a.context, min_umi=MIN_UMI, L_def="vocab",
+                 cpm="arithmetic mean of c/L*1e6", lfc="log2((pert+1e-9)/(ctrl+1e-9)), ungated",
+                 pvalue="nlog10p = -log10 two-sided MWU (pdex formula, full control pool), ungated",
+                 disp="NB method of moments, unclamped", reliability="8 half-splits, log1p CP10k, Pearson, SB",
+                 seed=a.seed, source=json.dumps(src.provenance))
+    tmp = out / f"{a.context}.h5.tmp"
+    write_h5(tmp, res, vocab, gm.measured_idx, utg, attrs)
+    tmp.rename(out / f"{a.context}.h5")
+    prov = dict(context=a.context, reader=cfg["reader"], args=cfg.get("args", {}), source=src.provenance,
+                genes=gm.report, qc=qc, n_targets=int(len(utg)), n_ctrl=int(c["n_cells"]), checks=chk,
+                minutes=round((time.time() - T0) / 60, 1),
+                peak_rss_gb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6, 2))
+    json.dump(prov, open(out / f"{a.context}.json", "w"), indent=1)
+    log(f"wrote {out / a.context}.h5: {len(utg):,} targets; peak RSS {prov['peak_rss_gb']} GB")
+    if hasattr(src, "cleanup"):
+        src.cleanup()
+        log(f"removed staged raw files of {a.context}")
+
+
+if __name__ == "__main__":
+    main()

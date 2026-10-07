@@ -1,0 +1,37 @@
+[workspace]
+authors = ["mibohl <>"]
+channels = ["conda-forge", "bioconda"]
+name = "VCC-git"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+smoke = "python tests/smoke.py"
+dry-run = "bash scripts/dry_run.sh"
+
+[dependencies]
+python = "3.12.*"
+snakemake = ">=9.0,<10"
+numpy = ">=2.5.2,<3"
+scipy = ">=1.18.0,<2"
+scikit-learn = ">=1.9.0,<2"
+pandas = ">=3.0.5,<4"
+anndata = ">=0.13.2,<0.14"
+scanpy = ">=1.12.3,<2"
+h5py = ">=3.16.0,<4"
+polars = ">=1.44.1,<2"
+pyarrow = ">=25.0.0,<26"
+tqdm = ">=4.70.0,<5"
+snakemake-executor-plugin-cluster-generic = ">=1.0.9,<2"
+
+pyyaml = ">=6,<7"
+numba = ">=0.61,<1"
+pigz = ">=2.8,<3"
+r-base = ">=4.4,<4.6"
+r-matrix = ">=1.6,<2"
+bioconductor-s4vectors = "*"
+
+[pypi-dependencies]
+pdex = ">=0.3.0, <0.4"
+
+cell-eval2 = { git = "https://github.com/ArcInstitute/cell-eval2.git", rev = "5e64833518a6603a0301cbe28185d49c30f4a986" }
