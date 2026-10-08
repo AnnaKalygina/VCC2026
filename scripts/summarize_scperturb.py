@@ -4,9 +4,13 @@ import numpy as np
 import scipy.sparse as sp
 from downloads import download as fetch
 STUDIES = {"frangieh": ("FrangiehIzar2021_RNA.h5ad", "dc438f53c476a3dd562898654d48ed15", ["frangieh__control", "frangieh__ifng", "frangieh__coculture"]), "adamson": ("AdamsonWeissman2016_GSM2406681_10X010.h5ad", "2fa44ea61a8dd35742af618638ec65fc", ["adamson__k562"])}
+RECORD = "https://zenodo.org/records/7416068/files/{}"
+CONTROL_LABELS = {"control"}   # Frangieh obs['perturbation'] control value (lower-cased, stripped)
+
+
 def download(study, raw_dir):
     name, checksum, _ = STUDIES[study]
-    return fetch(f"https://zenodo.org/records/7416068/files/{name}?download=1", raw_dir / name, md5=checksum)
+    return fetch(RECORD.format(name) + "?download=1", raw_dir / name, md5=checksum)
 
 def log(message):
     print(message, flush=True)
