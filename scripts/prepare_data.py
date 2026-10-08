@@ -84,8 +84,32 @@ def viperturb():
     zenodo_file(18460279, 'genome_wide_manifest.txt', ROOT / 'data/raw/viperturb/genome_wide_manifest.txt')
 
 
+PROBESET = 'Chromium_Human_Transcriptome_Probe_Set_v1.0.1_GRCh38-2020-A.csv'
+PROBESET_PATH = ROOT / 'data/raw/probeset' / PROBESET
+
+
+def probeset():
+    """10x Flex Human Transcriptome Probe Set v1.0.1: its gene symbols are exactly the 18,533-gene panel."""
+    download('https://cf.10xgenomics.com/supp/cell-exp/probeset/' + PROBESET, PROBESET_PATH)
+
+
+def probeset_pairs():
+    """(symbol, Ensembl) per probe-set gene; deprecated ids keep their Ensembl stem."""
+    from genes import load_vocab
+    p = pd.read_csv(PROBESET_PATH, comment='#', dtype=str)
+    out = pd.DataFrame(dict(symbol=p.probe_id.str.split('|').str[1],
+                            ensembl=p.gene_id.str.replace('DEPRECATED_', '', regex=False)))
+    vocab = set(load_vocab())
+    if set(out.symbol) != vocab:
+        raise ValueError(f'probe set symbols differ from the panel: {len(set(out.symbol) ^ vocab)} symbols')
+    return out.drop_duplicates()
+
+
 def ensembl():
     from genes import load_vocab
+    # The probe set defines the panel, so its Ensembl ids take precedence; the other sources only add ids
+    # the probe set does not list (e.g. older or newer annotation versions of the same gene).
+    canon = probeset_pairs()
     pairs = []
     with h5py.File(ROOT / 'data/vcc2025/adata_Training.h5ad') as h:
         pairs.append(pd.DataFrame(dict(symbol=index_of(h, 'var'), ensembl=cat(h, 'var/gene_id'), source='vcc2025_H1')))
@@ -102,6 +126,8 @@ def ensembl():
     df['ensembl'] = df.ensembl.str.split('.').str[0]
     df = df[df.symbol.isin(set(load_vocab())) & df.ensembl.str.startswith('ENSG')]
     df = df.groupby(['ensembl', 'symbol']).source.agg(lambda s: ','.join(sorted(set(s)))).reset_index()
+    df = df[~df.ensembl.isin(set(canon.ensembl))]
+    df = pd.concat([canon[['ensembl', 'symbol']].assign(source='flex_probeset_v1.0.1'), df], ignore_index=True)
     ambiguous = df.groupby('ensembl').symbol.nunique()
     ambiguous = set(ambiguous[ambiguous > 1].index)
     if ambiguous:
@@ -116,7 +142,7 @@ def ensembl():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('step', choices=['h1', 'validate-h1', 'vocabulary', 'orion', 'feng', 'dld1', 'viperturb', 'ensembl'])
+    ap.add_argument('step', choices=['h1', 'validate-h1', 'vocabulary', 'probeset', 'orion', 'feng', 'dld1', 'viperturb', 'ensembl'])
     ap.add_argument('--split', choices=SPLITS)
     a = ap.parse_args()
     os.chdir(ROOT)

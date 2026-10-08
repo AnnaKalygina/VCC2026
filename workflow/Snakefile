@@ -3,7 +3,8 @@ from pathlib import Path
 configfile: "workflow/config.yaml"
 CTX = config["contexts"]
 H1 = [f"data/vcc2025/adata_{s}.h5ad" for s in ("Training", "Validation", "Test")]
-MAP_INPUTS = [H1[0], "data/vcc2026/gene_names.csv", "data/orion_probe/gene_metadata.parquet",
+PROBESET = "data/raw/probeset/Chromium_Human_Transcriptome_Probe_Set_v1.0.1_GRCh38-2020-A.csv"
+MAP_INPUTS = [H1[0], "data/vcc2026/gene_names.csv", PROBESET, "data/orion_probe/gene_metadata.parquet",
               "data/raw/gse337988/low_rowdata.csv.gz", "data/raw/feng/GenomeWideScreen_LFC_byGene.tsv.gz"]
 PREP = {
     "h1": ["data/vcc2025/validated.json"],
@@ -40,6 +41,12 @@ rule vocabulary:
     threads: 1
     resources: mem_mb_per_cpu=1000, runtime=10, slurm_partition="normal.4h"
     shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py vocabulary"
+
+rule prepare_probeset:
+    output: PROBESET
+    threads: 1
+    resources: mem_mb_per_cpu=1000, runtime=30, slurm_partition="normal.4h"
+    shell: "bash scripts/run_job.sh pixi run python scripts/prepare_data.py probeset"
 
 rule prepare_orion:
     output: "data/orion_probe/gene_metadata.parquet"
