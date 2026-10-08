@@ -3,8 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.."
 : "${SLURM_JOB_ID:?Run data work through Slurm}"
-. "${LMOD_ROOT:?}/lmod/init/bash"
-ml eth_proxy
+if [[ -n "${LMOD_ROOT:-}" ]]; then
+    . "$LMOD_ROOT/lmod/init/bash"
+    ml eth_proxy
+fi
+if [[ -n "${PIXI_HOME:-}" ]]; then
+    export PATH="$PIXI_HOME/bin:$PATH"
+fi
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 export NUMBA_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}" POLARS_MAX_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
