@@ -8,6 +8,7 @@ import subprocess
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+UA = 'curl/7.68.0'
 
 
 def digest(path, algorithm='sha256'):
@@ -51,7 +52,7 @@ def download(url, dest, size=None, md5=None, tries=5):
         if aria2:
             cmd = [aria2, '--quiet=true', '--continue=true', '--split=16', '--max-connection-per-server=16',
                    '--min-split-size=16M', '--file-allocation=none', '--max-tries=20', '--retry-wait=5',
-                   '--timeout=60', '--no-want-digest-header=true', '--auto-file-renaming=false',
+                   '--timeout=60', '--no-want-digest-header=true', f'--user-agent={UA}', '--auto-file-renaming=false',
                    '--allow-overwrite=false', '--dir', str(part.parent), '--out', part.name, url]
         else:
             cmd = ['curl', '-fsSL', '--retry', '3', '--connect-timeout', '60', '-C', '-', '-o', str(part), url]
