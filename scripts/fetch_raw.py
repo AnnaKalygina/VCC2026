@@ -78,6 +78,11 @@ SOURCES = [
                        'nadig2025'),
     lambda: geo_series('GSE337988', ['GSE337988_sublib2_processed_objects_Low_assays.h5'], 'gse337988'),
     lambda: geo_samples('GSE295214', 'gse295214', lambda n: n.endswith('_filtered_feature_bc_matrix.h5')),
+    # CD4 T (Marson 2025): GEO's per-lane Cell Ranger matrices hold every cell of the authors' S3 h5ad files with
+    # identical counts (checked 2026-10-09 on donor 1 resting, lane R1L01: 137,668 of 137,668 cells, 300 cells
+    # count-identical), plus the guide-capture features, at a tenth of the size (171 GB vs about 1.7 TB).
+    # The authors' per-cell guide calls and QC flags come from the S3 obs tables (scripts/fetch_cd4t_obs.py).
+    lambda: geo_samples('GSE314342', 'cd4t_marson2025', lambda n: n.endswith('_sample_filtered_feature_bc_matrix.h5')),
 ]
 
 
