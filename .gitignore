@@ -1,0 +1,7 @@
+data/
+logs/
+results/
+.pixi/
+.cache/
+.snakemake/
+__pycache__/
