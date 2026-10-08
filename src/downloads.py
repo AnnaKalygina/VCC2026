@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import urllib.request
@@ -45,9 +46,16 @@ def download(url, dest, size=None, md5=None, tries=5):
     if size is None and md5 is None:
         raise ValueError(f'{url}: neither upstream size nor checksum is available')
     part = dest.with_name(dest.name + '.part')
+    aria2 = shutil.which('aria2c')
     for attempt in range(tries):
-        result = subprocess.run(['curl', '-fsSL', '--retry', '3', '--connect-timeout', '60',
-                                 '-C', '-', '-o', str(part), url])
+        if aria2:
+            cmd = [aria2, '--quiet=true', '--continue=true', '--split=16', '--max-connection-per-server=16',
+                   '--min-split-size=16M', '--file-allocation=none', '--max-tries=20', '--retry-wait=5',
+                   '--timeout=60', '--auto-file-renaming=false', '--allow-overwrite=false', '--dir', str(part.parent),
+                   '--out', part.name, url]
+        else:
+            cmd = ['curl', '-fsSL', '--retry', '3', '--connect-timeout', '60', '-C', '-', '-o', str(part), url]
+        result = subprocess.run(cmd)
         if result.returncode == 0 and part.exists() and (size is None or part.stat().st_size == size):
             break
         print(f'WARNING download {attempt + 1}/{tries} failed or incomplete: {url}', flush=True)
