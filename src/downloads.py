@@ -40,7 +40,8 @@ def download(url, dest, size=None, md5=None, tries=5):
             return dest
         raise ValueError(f'{dest}: cached input failed validation; remove it explicitly before retrying')
     if size is None:
-        with urllib.request.urlopen(urllib.request.Request(url, method='HEAD'), timeout=120) as response:
+        with urllib.request.urlopen(urllib.request.Request(url, method='HEAD', headers={'User-Agent': UA}),
+                                    timeout=120) as response:
             value = response.headers.get('Content-Length')
             if value is not None:
                 size = int(value)
