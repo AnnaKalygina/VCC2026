@@ -61,6 +61,52 @@ for group in (0, 1):
     np.testing.assert_allclose(res['lfc'][group], np.log2((x.mean(0) + 1e-9) / (cpm.mean(0) + 1e-9)), atol=1e-5)
     p = mannwhitneyu(x, cpm, axis=0, method='asymptotic', use_continuity=True).pvalue
     np.testing.assert_allclose(res['nlog10p'][group], -np.log10(p), atol=1e-5, rtol=1e-5)
+# Batch-matched reference, per-gene SE and half deltas against brute force: 3 batches, the third
+# without controls; batch sums are kept (B <= MAX_BATCH_SUMS).
+from stats import MIN_CTRL_BATCH
+cb = np.repeat([0, 1], 16)
+ctrl_b = np.vstack([ctrl, rng.poisson(80, (2 * MIN_CTRL_BATCH - 32, 24))])
+cb = np.r_[cb, np.repeat([0, 1], MIN_CTRL_BATCH - 16)]
+lcb = ctrl_b.sum(1)
+pb = rng.choice([0, 1, 2], 40, p=[.6, .3, .1])
+eb = Engine(24, 2, seed=0, batches=['b0', 'b1'])
+eb.set_controls(sp.csr_matrix(ctrl_b), lcb, batch=cb)
+eb.add(sp.csr_matrix(pert), lp, groups, batch=pb)
+rb = eb.result(np.array([-1, -1]))
+cm_b = np.array([(ctrl_b[cb == k] / lcb[cb == k, None]).mean(0) * 1e6 for k in (0, 1)])
+for group in (0, 1):
+    m = groups == group
+    x = pert[m] / lp[m, None] * 1e6
+    w = np.array([(pb[m] == k).sum() for k in (0, 1)], float)
+    ref = w @ cm_b / w.sum()
+    np.testing.assert_allclose(rb['lfc_batchmatched'][group], np.log2((x.mean(0) + 1e-9) / (ref + 1e-9)), rtol=1e-5)
+    np.testing.assert_allclose(rb['se_cpm'][group], x.std(0, ddof=1) / np.sqrt(m.sum()), rtol=1e-5)
+    assert rb['n_cells_by_batch'][group].tolist() == [int(w[0]), int(w[1]), int((pb[m] == 2).sum())]
+    np.testing.assert_allclose(rb['frac_no_ctrl'][group], (pb[m] == 2).mean())
+    for k in (0, 1, 2):
+        if (pb[m] == k).any():
+            np.testing.assert_allclose(rb['mean_cpm_by_batch'][group, k], x[pb[m] == k].mean(0), rtol=1e-5)
+    np.testing.assert_allclose(rb['lfc'][group], np.log2((x.mean(0) + 1e-9) / ((ctrl_b / lcb[:, None]).mean(0) * 1e6 + 1e-9)), atol=1e-5)
+    assert np.isfinite(rb['half_delta_A'][group]).all() and np.isfinite(rb['half_delta_B'][group]).all()
+np.testing.assert_allclose(rb['control']['mean_cpm_by_batch'], cm_b, rtol=1e-5)
+np.testing.assert_allclose(rb['control']['se_cpm'], (ctrl_b / lcb[:, None] * 1e6).std(0, ddof=1) / np.sqrt(len(cb)), rtol=1e-5)
+# Half deltas reproduce the split-0 reliability correlation over all genes.
+r0 = np.corrcoef(rb['half_delta_A'][0], rb['half_delta_B'][0])[0, 1]
+np.testing.assert_allclose(r0, rb['reliability_r'][0, 0], rtol=1e-4)
+assert 'lfc_batchmatched' not in res and np.isfinite(res['se_cpm']).all()
+# Gene-major block mode (KOLF, Feng) must equal row mode on the same cells, batches included.
+from readers import run_gene_major
+allx = sp.vstack([sp.csr_matrix(ctrl_b), sp.csr_matrix(pert)]).tocsc()
+is_c = np.r_[np.ones(len(cb), bool), np.zeros(40, bool)]
+blocks = [(np.arange(0, 12), allx[:, :12]), (np.arange(12, 24), allx[:, 12:])]
+eg = Engine(24, 2, seed=0, batches=['b0', 'b1'])
+labels = np.r_[np.array(['b0', 'b1'])[cb], np.array(['b0', 'b1', 'b2'])[pb]]
+run_gene_major(iter(blocks), eg, np.r_[lcb, lp].astype(float), np.r_[np.full(len(cb), -1), groups], is_c,
+               dict(ctrl_seen=0, ctrl_low_umi=0, pert_seen=0, pert_unlabelled=0, pert_low_umi=0), lambda m: None, 1000, labels)
+rg = eg.result(np.array([-1, -1]))
+for k in ('mean_cpm', 'lfc', 'nlog10p', 'se_cpm', 'lfc_batchmatched', 'half_delta_A', 'reliability_r', 'mean_cpm_by_batch'):
+    np.testing.assert_allclose(rg[k], rb[k], rtol=1e-5, atol=1e-6, err_msg=k)
+
 p, alpha, libs = fit_control(ctrl)
 y = encode_decoupled(p, p, alpha, libs, np.zeros(24), np.zeros(24), 8, rng)
 assert y.shape == (8, 24) and (y >= 0).all() and np.equal(y, np.rint(y)).all()
@@ -105,4 +151,5 @@ merged = merge_moments(parts, ['T0', 'T1', 'non-targeting'])
 assert merged.counts.tolist() == [2., 8., 3.]
 contexts = yaml.safe_load((ROOT / 'workflow/config.yaml').read_text())['contexts']
 assert len(contexts) == 21 and all(c['reader'] in READERS for c in contexts.values())
+assert all('batch_key' in vars(r) for r in READERS.values()), 'every reader states its batch key (or None)'
 print(f'PASS: small synthetic statistics, encoder, prediction, cache, H1, and aggregation checks ({time.monotonic()-start:.1f}s)')

@@ -1,17 +1,21 @@
 """One reader per source family. Every reader exposes
 
     .genes, .ensembl   native feature axis (ensembl may be None)
-    .controls()        -> iterator of native count chunks [n, n_native] holding ONLY control cells
-    .cells()           -> iterator of (native count chunk, labels) for the PERTURBED cells
+    .controls()        -> iterator of (native count chunk [n, n_native] holding ONLY control cells, batches)
+    .cells()           -> iterator of (native count chunk, labels, batches) for the PERTURBED cells
                           (labels: target name per row; "" = drop the row)
     .targets           all target labels (available once .controls() is exhausted)
     .provenance        dict merged into the output json
+    .batch_key         what the batch labels are (None: the deposit has no batch structure we use,
+                       and every chunk's batches is None)
 
-or, for gene-major sources (CSC / gene-row text), `.run_blocks(engine, gene_map, label_index)`.
+or, for gene-major sources (CSC / gene-row text), `.run_blocks(engine, gene_map, label_index)` plus
+`.is_ctrl` and `.batch_labels` (per cell, or None).
 Cell-level QC that is specific to a deposit (guide singlets, hashing, ...) lives here and reuses the
-original ingest code; the generic L >= 1000 vocab-UMI filter is applied by run.py.
+original ingest code; the generic vocab-UMI filter (per-context min_umi) is applied by run.py.
 """
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -60,6 +64,14 @@ def x_rows(h, lo, hi, key="X"):
     return sp.csr_matrix((d.astype(np.float64), ix, ip - ip[0]), shape=(hi - lo, n_cols))
 
 
+def obs_strings(h, key):
+    """An obs column as strings, whether categorical, string or numeric."""
+    node = h[key]
+    if isinstance(node, h5py.Dataset) and node.dtype.kind in "iuf":
+        return node[:].astype(np.int64).astype(str) if node.dtype.kind in "iu" else node[:].astype(str)
+    return cat(h, key)
+
+
 def check_counts(X, where):
     """Refuse non-integer matrices: everything downstream assumes raw UMI counts."""
     d = X.data[:2_000_000]
@@ -74,6 +86,7 @@ class H1:
     (verified: same obs_names), so controls are read once, from Training."""
     SPLITS = ("Training", "Validation", "Test")
     CTRL = "non-targeting"
+    batch_key = "obs/batch (48 Flex batches)"
 
     def __init__(self, tmp=None):
         self.paths = [ROOT / f"data/vcc2025/adata_{s}.h5ad" for s in self.SPLITS]
@@ -95,27 +108,38 @@ class H1:
 
     def controls(self):
         with h5py.File(self.paths[0], "r") as f:
-            lab = cat(f, "obs/target_gene")
+            lab, bat = cat(f, "obs/target_gene"), cat(f, "obs/batch")
             for lo in range(0, len(lab), CHUNK):
                 X = x_rows(f, lo, min(lo + CHUNK, len(lab)))
                 check_counts(X, "H1")
-                yield X[np.flatnonzero(lab[lo:lo + CHUNK] == self.CTRL)]
+                k = np.flatnonzero(lab[lo:lo + CHUNK] == self.CTRL)
+                yield X[k], bat[lo:lo + CHUNK][k]
 
     def cells(self):
         for p in self.paths:
             with h5py.File(p, "r") as f:
-                lab = cat(f, "obs/target_gene")
+                lab, bat = cat(f, "obs/target_gene"), cat(f, "obs/batch")
                 for lo in range(0, len(lab), CHUNK):
                     X = x_rows(f, lo, min(lo + CHUNK, len(lab)))
                     lb = lab[lo:lo + CHUNK]
                     k = np.flatnonzero(lb != self.CTRL)
-                    yield X[k], lb[k]
+                    yield X[k], lb[k], bat[lo:lo + CHUNK][k]
 
 
 
 
 # ----------------------------------------------------------------------------------- shared helpers
-from downloads import download as stage
+def raw_file(source, name):
+    """data/raw/<source>/<name> as fetched by scripts/fetch_raw.py, with its download receipt. Summaries never
+    download (LeoMed compute nodes are offline) and never delete raw files."""
+    path = ROOT / "data/raw" / source / name
+    receipt = ROOT / "data/provenance" / (hashlib.sha256(str(path.resolve()).encode()).hexdigest() + ".json")
+    if not path.exists() or not receipt.exists():
+        raise SystemExit(f"{path}: not fetched; run scripts/fetch_raw.py first")
+    r = json.loads(receipt.read_text())
+    if path.stat().st_size != r["bytes"]:
+        raise SystemExit(f"{path}: size differs from its download receipt")
+    return path, r
 
 
 def prefetched(items, fetch):
@@ -195,11 +219,13 @@ class GeneMajor:
         assert not self.parts and not self.ready and (self.have == self.need).all(), "gene-major stream incomplete"
 
 
-def run_gene_major(blocks, eng, L, grp, is_ctrl, qc, log):
+def run_gene_major(blocks, eng, L, grp, is_ctrl, qc, log, min_umi, batch_labels=None):
     """Feed complete gene blocks to the engine. L: vocab depth per cell (from a first pass),
-    grp: target index per cell (-1 = drop), is_ctrl: control mask. Applies the UMI filter."""
-    from stats import MIN_UMI
-    ok = L >= MIN_UMI
+    grp: target index per cell (-1 = drop), is_ctrl: control mask, batch_labels: per cell (None without
+    batches). Applies the UMI filter."""
+    from stats import batch_codes
+    bat = None if batch_labels is None else batch_codes(batch_labels, eng.batches)
+    ok = L >= min_umi
     qc["ctrl_seen"] += int(is_ctrl.sum())
     qc["ctrl_low_umi"] += int((is_ctrl & ~ok).sum())
     qc["pert_seen"] += int((~is_ctrl).sum())
@@ -211,9 +237,9 @@ def run_gene_major(blocks, eng, L, grp, is_ctrl, qc, log):
     first = True
     for k, (cols, X) in enumerate(blocks):
         X = X.tocsr()
-        eng.set_controls(X[crow], L[crow], cols)
+        eng.set_controls(X[crow], L[crow], cols, batch=None if bat is None else bat[crow])
         eng.reset_ranks()
-        eng.add(X[prow], L[prow], grp[prow], cols, count_cells=first)
+        eng.add(X[prow], L[prow], grp[prow], cols, count_cells=first, batch=None if bat is None else bat[prow])
         first = False
         if k % 10 == 0:
             log(f"  gene block {k}: {len(cols)} genes")
@@ -223,13 +249,15 @@ def run_gene_major(blocks, eng, L, grp, is_ctrl, qc, log):
 # ----------------------------------------------------------------------------------- scPerturb
 class ScPerturb:
     """Zenodo 7416068 h5ad (md5-pinned by scripts/summarize_scperturb.py). Single-gene perturbations only."""
+    batch_key = None
 
     def __init__(self, study, context, tmp):
         sys.path.insert(0, str(ROOT / "scripts"))
         import anndata as ad
         import summarize_scperturb as S
-        self.tmp = Path(tmp)
-        path = S.download(study, self.tmp)
+        path, receipt = raw_file("scperturb", S.STUDIES[study][0])
+        if receipt["upstream_md5"] != S.STUDIES[study][1]:
+            raise SystemExit(f"{path}: receipt md5 {receipt['upstream_md5']} is not the pinned {S.STUDIES[study][1]}")
         a = ad.read_h5ad(path)
         x, self.matrix_field = S.choose_count_matrix(a)
         S.validate_counts(x, self.matrix_field)
@@ -254,20 +282,16 @@ class ScPerturb:
         self.targets = sorted(set(lab[self.pert_rows]) - {""})
         self.provenance = dict(source=S.RECORD.format(S.STUDIES[study][0]), md5=S.STUDIES[study][1],
                                matrix=self.matrix_field, perturbation_col=col, condition=cinfo,
-                               n_compound_dropped=int((inctx & ~is_ctrl & compound).sum()))
-        self.path = path
+                               n_compound_dropped=int((inctx & ~is_ctrl & compound).sum()), raw=receipt)
 
     def controls(self):
         for lo in range(0, len(self.ctrl_rows), CHUNK):
-            yield self.X[self.ctrl_rows[lo:lo + CHUNK]]
+            yield self.X[self.ctrl_rows[lo:lo + CHUNK]], None
 
     def cells(self):
         for lo in range(0, len(self.pert_rows), CHUNK):
             r = self.pert_rows[lo:lo + CHUNK]
-            yield self.X[r], self.lab[r]
-
-    def cleanup(self):
-        self.path.unlink()
+            yield self.X[r], self.lab[r], None
 
 
 # ----------------------------------------------------------------------------------- Feng hPSC
@@ -276,14 +300,14 @@ class Feng:
     `NonTarget` (the authors' definition: 499,998 control cells; only ~48 are NonTarget, guide
     assignment succeeded for ~30% of cells, so `unassigned` is mostly cells with an undetected guide
     -- an average over all knockdowns; the user-confirmed choice)."""
+    batch_key = "pool (screen, pool, day) x cell line: the authors' cell-line and inlet adjustment"
 
     def __init__(self, screen, tmp):
         sys.path.insert(0, str(ROOT / "src"))
         import ingest_feng as m
         self.m = m
         name, fid, meta = m.SCREENS[screen]
-        sizes = m.api_sizes(m.ARTICLE_COUNTS)
-        self.path = stage(f"https://ndownloader.figshare.com/files/{fid}", Path(tmp) / name, size=sizes[name][1])
+        self.path, receipt = raw_file("feng", name)
         self.meta_path = ROOT / m.RAW / meta
         feats = []
         for ft, _ in self._rows(parse=False):
@@ -295,8 +319,9 @@ class Feng:
         meta = m.load_meta(str(self.meta_path), self.cells_hdr)
         self.lab = meta["label"].to_numpy().astype(str)
         self.is_ctrl = self.lab == m.CTRL
+        self.batch_labels = meta["stratum"].to_numpy().astype(str)
         self.targets = sorted(set(self.lab[~self.is_ctrl]))
-        self.provenance = dict(source=f"figshare file {fid} ({name})", meta=str(self.meta_path),
+        self.provenance = dict(source=f"figshare file {fid} ({name})", raw=receipt, meta=str(self.meta_path),
                                control="Guide_Call in {unassigned, NonTarget} (authors' definition)",
                                n_nontarget=int(meta["Guide_Call"].astype(str).str.startswith("NonTarget").sum()))
 
@@ -319,7 +344,7 @@ class Feng:
         if proc.wait() != 0:
             raise SystemExit(f"pigz failed on {self.path}")
 
-    def run_blocks(self, eng, gm, t_of, qc, log):
+    def run_blocks(self, eng, gm, t_of, qc, log, min_umi):
         n = len(self.cells_hdr)
         L = np.zeros(n)
         mapped = np.zeros(len(self.feats), bool)
@@ -338,10 +363,7 @@ class Feng:
                 yield from gmj.add(r, ix, v)
             yield from gmj.flush(final=True)
             gmj.check_done()
-        run_gene_major(blocks(), eng, L, grp, self.is_ctrl, qc, log)
-
-    def cleanup(self):
-        self.path.unlink()
+        run_gene_major(blocks(), eng, L, grp, self.is_ctrl, qc, log, min_umi, self.batch_labels)
 
 
 # ----------------------------------------------------------------------------------- GSE337988 DLD1
@@ -350,20 +372,24 @@ class DLD1:
     singlets, second caller agrees, no NTC_MENG). Groups are TSS groups; post_result keeps one TSS per
     gene: the strongest own-gene knockdown among TSS groups with >= 20 cells (else the largest group)."""
     URL = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE337nnn/GSE337988/suppl/GSE337988_sublib2_processed_objects_Low_assays.h5"
+    batch_key = "colData Sample (10x channel)"
 
     def __init__(self, tmp, procs=4):
         import ingest_gse337988 as m
         self.m, self.procs = m, procs
-        self.path = stage(self.URL, ROOT / m.H5)            # the ingest's own path: _read_block reads m.H5
+        self.path, receipt = raw_file("gse337988", self.URL.rsplit("/", 1)[1])
+        m.H5 = str(self.path)                               # _read_block (forked workers) reads m.H5
         self.rows, code, names, self.gene_of, _ = m.cell_table(min_cells=1)
         self.lab = names[code]
+        self.bat = pd.read_csv(ROOT / m.COLDATA, usecols=["Sample"], dtype=str)["Sample"].to_numpy()[self.rows]
         rd = pd.read_csv(ROOT / m.ROWDATA, dtype=str, keep_default_na=False)
         self.genes, self.ensembl = rd["Symbol"].to_numpy(), rd["feature"].to_numpy()
         with h5py.File(self.path) as f:
             assert f["assay001"].shape[1] == len(rd), "rowData does not match the h5 gene axis"
         self.targets = sorted(set(self.lab) - {m.CTRL})
         self.tss_gene = dict(zip(names, self.gene_of))
-        self.provenance = dict(source=self.URL, coldata=m.COLDATA, qc="ingest_gse337988.cell_table(min_cells=1)")
+        self.provenance = dict(source=self.URL, raw=receipt, coldata=m.COLDATA,
+                               qc="ingest_gse337988.cell_table(min_cells=1)")
 
     def _stream(self, sel):
         import multiprocessing as mp
@@ -372,19 +398,19 @@ class DLD1:
             n_rows, G = f["assay001"].shape
         keep = np.zeros(n_rows, bool)
         keep[self.rows[sel]] = True
-        lab = self.lab[sel]
+        lab, bat = self.lab[sel], self.bat[sel]
         starts = [lo for lo in range(0, n_rows, m.BLOCK) if keep[lo:lo + m.BLOCK].any()]
         off = 0
         with mp.get_context("fork").Pool(self.procs, initializer=m._init, initargs=(keep,)) as pool:
             for lo, lens, c, v, _ in pool.imap(m._read_block, starts, chunksize=4):
                 X = sp.csr_matrix((v.astype(np.float64), c.astype(np.int32), np.r_[0, np.cumsum(lens)]), shape=(len(lens), G))
-                yield X, lab[off:off + len(lens)]
+                yield X, lab[off:off + len(lens)], bat[off:off + len(lens)]
                 off += len(lens)
         assert off == int(sel.sum()), "DLD1 stream lost rows"
 
     def controls(self):
-        for X, _ in self._stream(self.lab == self.m.CTRL):
-            yield X
+        for X, _, bat in self._stream(self.lab == self.m.CTRL):
+            yield X, bat
 
     def cells(self):
         yield from self._stream(self.lab != self.m.CTRL)
@@ -407,21 +433,22 @@ class DLD1:
         self.provenance["tss_chosen"] = {genes[i]: utg[i] for i in keep}
         return genes[keep], keep
 
-    def cleanup(self):
-        self.path.unlink()
-
 
 # ----------------------------------------------------------------------------------- GSE295214 hESC
 class HESC:
-    """GEO GSE295214: 85 Cell Ranger h5 (staged in tmp for both passes), guide calling as
+    """GEO GSE295214: 85 Cell Ranger h5 from data/raw, guide calling as
     ingest_gse295214.read_sample (top construct >= 5 UMI and >= 50% of guide UMIs)."""
+    batch_key = "GEO sample file (10x lane)"
 
-    def __init__(self, tmp):
+    N_SAMPLES = 85
+
+    def __init__(self, tmp=None):
         import ingest_gse295214 as m
-        self.m, self.tmp = m, Path(tmp)
-        self.files = []
-        for gsm, fn in m.sample_files():
-            self.files.append(stage(m.SAMPLE.format(a=gsm[3:7], b=gsm[3:], f=fn), self.tmp / fn))
+        self.m = m
+        names = sorted(p.name for p in (ROOT / "data/raw/gse295214").glob("GSM*_filtered_feature_bc_matrix.h5"))
+        if len(names) != self.N_SAMPLES:
+            raise SystemExit(f"GSE295214: {len(names)} sample matrices on disk, expected {self.N_SAMPLES}")
+        self.files = [raw_file("gse295214", n)[0] for n in names]
         with h5py.File(self.files[0]) as h:
             ft = h["matrix/features/feature_type"][:].astype(str)
             self.genes = h["matrix/features/name"][:].astype(str)[ft == "Gene Expression"]
@@ -435,37 +462,32 @@ class HESC:
         for p in self.files:
             g, X, tgt, rate = self.m.read_sample(str(p), 5, 0.5)
             assert list(g) == list(self.genes), f"{p}: gene axis differs"
-            yield X, tgt
+            yield X, tgt, Path(p).name
 
     def controls(self):
         tg = set()
-        for X, tgt in self._iter():
+        for X, tgt, lane in self._iter():
             tg |= set(tgt) - {self.CTRL}
-            yield X[np.flatnonzero(tgt == self.CTRL)]
+            k = np.flatnonzero(tgt == self.CTRL)
+            yield X[k], np.full(len(k), lane)
         self.targets = sorted(tg)
 
     def cells(self):
-        for X, tgt in self._iter():
+        for X, tgt, lane in self._iter():
             k = np.flatnonzero(tgt != self.CTRL)
-            yield X[k], tgt[k]
-
-    def cleanup(self):
-        shutil.rmtree(self.tmp)
+            yield X[k], tgt[k], np.full(len(k), lane)
 
 
 # ----------------------------------------------------------------------------------- VIPerturb K562
 class VIPerturb:
     """Zenodo 18460279 genome_wide_bin{A,B,C}.RDS -> scripts/viperturb_extract.R triplets (one bin on disk at a
     time). All three bins carry the SAME non-targeting cells, so controls come from bin A only."""
+    batch_key = None
     ZEN = "https://zenodo.org/api/records/18460279"
 
     def __init__(self, tmp):
-        import json
-        import urllib.request
         import ingest_viperturb as m
         self.m, self.tmp = m, Path(tmp)
-        rec = json.load(urllib.request.urlopen(self.ZEN, timeout=120))
-        self.md5 = {f["key"]: f["checksum"][4:] for f in rec["files"]}
         self._extract("A")
         self.genes = np.array(open(self.tmp / "binA/genes.txt").read().splitlines())
         self.ensembl = None
@@ -478,10 +500,8 @@ class VIPerturb:
         d = self.tmp / f"bin{b}"
         if (d / "info.txt").exists():
             return d
-        f = f"genome_wide_bin{b}.RDS"
-        rds = stage(f"{self.ZEN}/files/{f}/content", self.tmp / f, md5=self.md5[f])
+        rds, _ = raw_file("viperturb", f"genome_wide_bin{b}.RDS")
         subprocess.run(["Rscript", "scripts/viperturb_extract.R", str(rds), str(d)], check=True, cwd=ROOT)
-        rds.unlink()
         return d
 
     def _bin(self, b, want_ctrl):
@@ -510,81 +530,85 @@ class VIPerturb:
 
     def controls(self):
         for X, _ in self._bin("A", True):
-            yield X
+            yield X, None
 
     def cells(self):
         for b in self.m.BINS:
-            yield from self._bin(b, False)
+            for X, lab in self._bin(b, False):
+                yield X, lab, None
             shutil.rmtree(self.tmp / f"bin{b}")
 
     def cleanup(self):
-        shutil.rmtree(self.tmp)
+        shutil.rmtree(self.tmp)                            # extracted triplets only; the RDS files stay
 
 
 # ----------------------------------------------------------------------------------- X-Atlas/Orion
 class Orion:
-    """HF Xaira-Therapeutics/X-Atlas-Orion parquet shards, streamed shard by shard twice (controls first;
-    every shard holds ~5% controls), next shard prefetched. pass_guide_filter == 1 only."""
-    BASE = "https://huggingface.co/datasets/Xaira-Therapeutics/X-Atlas-Orion/resolve/main/data"
+    """HF Xaira-Therapeutics/X-Atlas-Orion parquet shards (revision pinned in scripts/fetch_raw.py), read shard by
+    shard twice (controls first; every shard holds ~5% controls), next shard prefetched. pass_guide_filter == 1 only."""
     CTRL = "Non-Targeting"
+    batch_key = "parquet shard (one GEM sample each)"
 
     def __init__(self, line, n_shards, tmp):
-        self.line, self.n, self.tmp = line, n_shards, Path(tmp)
+        self.line, self.n = line, n_shards
+        on_disk = sorted((ROOT / "data/raw/orion").glob(f"{line}_Batch*.parquet"))
+        expected = {f"{line}_Batch{i}.parquet" for i in range(1, n_shards + 1)}
+        if {p.name for p in on_disk} != expected:
+            raise SystemExit(f"Orion {line}: shards on disk differ from Batch1..{n_shards}")
+        self.receipts = {n: raw_file("orion", n)[1] for n in sorted(expected)}
         gm = pd.read_parquet(ROOT / "data/orion_probe/gene_metadata.parquet").sort_values("gene_token_id")
         assert (gm.gene_token_id.to_numpy() == np.arange(len(gm))).all()
         self.genes, self.ensembl = gm.gene_name.astype(str).to_numpy(), gm.ensembl_id.astype(str).to_numpy()
         self.targets = None
-        self.provenance = dict(source=f"{self.BASE}/{line}_Batch{{1..{n_shards}}}.parquet", line=line)
+        self.provenance = dict(source=self.receipts[f"{line}_Batch1.parquet"]["url"].replace("Batch1.", f"Batch{{1..{n_shards}}}."),
+                               line=line, sha256={n: r["sha256"] for n, r in self.receipts.items()})
 
     def _fetch(self, i):
         import ingest_orion_lfc as o
-        p = self.tmp / f"{self.line}_Batch{i}.parquet"
-        o.fetch(f"{self.BASE}/{self.line}_Batch{i}.parquet", str(p))
+        p = ROOT / "data/raw/orion" / f"{self.line}_Batch{i}.parquet"
         off, cols, raw, tgt = o.read_shard(str(p))
-        p.unlink()
         import pyarrow as pa
         pa.default_memory_pool().release_unused()          # arrow's pool otherwise keeps every shard's peak
-        return sp.csr_matrix((raw.astype(np.float64), cols, off), shape=(len(tgt), len(self.genes))), tgt
+        return sp.csr_matrix((raw.astype(np.float64), cols, off), shape=(len(tgt), len(self.genes))), tgt, p.stem
 
     def _iter(self):
-        self.tmp.mkdir(parents=True, exist_ok=True)
         yield from prefetched(list(range(1, self.n + 1)), self._fetch)
 
     def controls(self):
         tg = set()
-        for X, tgt in self._iter():
+        for X, tgt, shard in self._iter():
             tg |= set(tgt) - {self.CTRL}
-            yield X[np.flatnonzero(tgt == self.CTRL)]
+            k = np.flatnonzero(tgt == self.CTRL)
+            yield X[k], np.full(len(k), shard)
         self.targets = sorted(tg)
 
     def cells(self):
-        for X, tgt in self._iter():
+        for X, tgt, shard in self._iter():
             k = np.flatnonzero(tgt != self.CTRL)
-            yield X[k], tgt[k]
-
-    def cleanup(self):
-        shutil.rmtree(self.tmp)
+            yield X[k], tgt[k], np.full(len(k), shard)
 
 
 # ----------------------------------------------------------------------------------- Replogle / Nadig
-class RemoteRows:
-    """Replogle 2022 (figshare 20029387) and Nadig 2025 (GEO GSE264667) *_raw_singlecell_01.h5ad, streamed
-    twice by HTTP range (src/remote_h5.py). Deposits keep only genes > 0.01 UMI/cell; the rest are NA.
+class ReplogleRows:
+    """Replogle 2022 (figshare 20029387) and Nadig 2025 (GEO GSE264667) *_raw_singlecell_01.h5ad, read twice
+    in row chunks from data/raw. Deposits keep only genes > 0.01 UMI/cell; the rest are NA.
     Controls: obs/gene == 'non-targeting'. GWPS promoter variants are pooled by gene symbol (obs/gene)."""
     CTRL = "non-targeting"
+    batch_key = "obs/gem_group"
 
-    def __init__(self, kind, ref, name=None, tmp=None):
-        from add_dispersion import open_figshare, open_url
-        self._open = (lambda: open_figshare(ref, name)[0]) if kind == "figshare" else (lambda: open_url(ref)[0])
+    def __init__(self, source, name, tmp=None):
+        self.path, receipt = raw_file(source, name)
+        self._open = lambda: h5py.File(self.path, "r")
         h = self._open()
         self.lab = cat(h, "obs/gene")
+        self.bat = obs_strings(h, "obs/gem_group")
         idx = index_of(h, "var")
         self.genes = cat(h, "var/gene_name") if "gene_name" in h["var"] else idx
         self.ensembl = idx if str(idx[0]).startswith("ENSG") else None
         self.targets = sorted(set(self.lab) - {self.CTRL})
         assert self.CTRL in set(self.lab), "no non-targeting cells"
         self.n = len(self.lab)
-        self.provenance = dict(source=f"{kind}:{ref}" + (f"#{name}" if name else ""), control="obs/gene == non-targeting")
+        self.provenance = dict(source=receipt["url"], raw=receipt, control="obs/gene == non-targeting")
         h.close()
 
     def _iter(self):
@@ -592,30 +616,34 @@ class RemoteRows:
         for lo in range(0, self.n, CHUNK):
             hi = min(lo + CHUNK, self.n)
             X = x_rows(h, lo, hi)
-            if lo == 0:
-                check_counts(X, "replogle")
-            yield X, self.lab[lo:hi]
+            check_counts(X, str(self.path))
+            yield X, self.lab[lo:hi], self.bat[lo:hi]
         h.close()
 
     def controls(self):
-        for X, lb in self._iter():
-            yield X[np.flatnonzero(lb == self.CTRL)]
+        for X, lb, bat in self._iter():
+            k = np.flatnonzero(lb == self.CTRL)
+            yield X[k], bat[k]
 
     def cells(self):
-        for X, lb in self._iter():
+        for X, lb, bat in self._iter():
             k = np.flatnonzero(lb != self.CTRL)
-            yield X[k], lb[k]
+            yield X[k], lb[k], bat[k]
 
 
 # ----------------------------------------------------------------------------------- KOLF2.1J
 class Kolf:
-    """figshare+ 27261219 KOLF_Pan_Genome_QC_Filtered.h5ad (189 GB), `layers/counts` CSC, streamed by HTTP
-    range in column blocks: pass 1 = vocab depth per cell, pass 2 = the statistics, gene block by gene block.
-    Controls: obs/perturbed == 'False' (the deposit's own non-targeting flag); targets obs/gene_target."""
+    """figshare+ 27261219 KOLF_Pan_Genome_QC_Filtered.h5ad (189 GB), `layers/counts` CSC, read from data/raw
+    in column blocks: pass 1 = vocab depth per cell, pass 2 = the statistics, gene block by gene block.
+    Controls: obs/perturbed == 'False' (the deposit's own non-targeting flag); targets obs/gene_target.
+    Batch column to be chosen once the deposit is on disk."""
+    batch_key = None
+    batch_labels = None
 
     def __init__(self, tmp=None, max_nnz=24_000_000):
-        from add_dispersion import KOLF_ART, KOLF_FILE, open_figshare
-        self._open = lambda: open_figshare(KOLF_ART, KOLF_FILE)[0]
+        from add_dispersion import KOLF_ART, KOLF_FILE
+        self.path, receipt = raw_file("kolf", KOLF_FILE)
+        self._open = lambda: h5py.File(self.path, "r")
         self.max_nnz = max_nnz
         h = self._open()
         self.is_ctrl = cat(h, "obs/perturbed") == "False"
@@ -627,7 +655,7 @@ class Kolf:
         self.indptr = h["layers/counts/indptr"][:].astype(np.int64)
         assert len(self.indptr) == len(self.genes) + 1, "layers/counts is not CSC over var"
         self.targets = sorted(set(self.lab[~self.is_ctrl]))
-        self.provenance = dict(source=f"figshare+ {KOLF_ART}/{KOLF_FILE}", control="obs/perturbed == 'False'")
+        self.provenance = dict(source=f"figshare+ {KOLF_ART}/{KOLF_FILE}", raw=receipt, control="obs/perturbed == 'False'")
         h.close()
 
     def _columns(self, wanted):
@@ -650,7 +678,7 @@ class Kolf:
             g0 = g1
         h.close()
 
-    def run_blocks(self, eng, gm, t_of, qc, log):
+    def run_blocks(self, eng, gm, t_of, qc, log, min_umi):
         n = len(self.lab)
         wanted = np.zeros(len(self.genes), bool)
         wanted[np.unique(gm.M.nonzero()[0])] = True
@@ -669,69 +697,86 @@ class Kolf:
                 yield from gmj.add(j, r, v)
             yield from gmj.flush(final=True)
             gmj.check_done()
-        run_gene_major(blocks(), eng, L, grp, self.is_ctrl, qc, log)
+        run_gene_major(blocks(), eng, L, grp, self.is_ctrl, qc, log, min_umi)
 
 
 # ----------------------------------------------------------------------------------- CD4+ T (Marson 2025)
 class CD4T:
-    """S3 genome-scale-tcell-perturb-seq D{1..4}_{cond}.assigned_guide.h5ad (120-170 GB CSR each), the 4
-    donors pooled into one context per condition, streamed twice by HTTP range. Cells: guide_group ==
-    'targeting single sgRNA' and not low_quality; controls guide_type == 'non-targeting' (~76k/donor),
-    targets perturbed_gene_name. Donor gene axes differ -> only genes present in ALL donors (by Ensembl
-    id) are kept, each donor re-indexed onto that common axis."""
-    URL = "https://genome-scale-tcell-perturb-seq.s3.amazonaws.com/marson2025_data/{d}_{c}.assigned_guide.h5ad"
+    """Genome-scale CRISPRi in primary CD4+ T cells, 4 donors pooled into one context per condition. Counts: GEO
+    GSE314342 per-lane Cell Ranger matrices (one file per lane x donor x condition; the same cells and counts as
+    the authors' S3 h5ad files). Labels: the authors' S3 obs tables (scripts/fetch_cd4t_obs.py). Cells:
+    guide_group == 'targeting single sgRNA' and not low_quality; controls guide_type == 'non-targeting';
+    targets perturbed_gene_name. Batch: donor."""
     DONORS = ("D1", "D2", "D3", "D4")
+    RAW = ROOT / "data/raw/cd4t_marson2025"
+    CTRL = "\0ctrl"
+    batch_key = "donor"
 
     def __init__(self, cond, tmp=None):
-        from add_dispersion import open_url
-        self.open_url = open_url
-        self.urls = [self.URL.format(d=d, c=cond) for d in self.DONORS]
-        axes, self.meta = [], []
-        for u in self.urls:
-            h, _ = open_url(u)
-            ids, names = _dec(h["var/gene_ids"][:]), _dec(h["var/gene_name"][:])
-            gt, gg = cat(h, "obs/guide_type"), cat(h, "obs/guide_group")
-            lq = h["obs/low_quality"][:].astype(bool)
-            ok = (gg == "targeting single sgRNA") & ~lq
-            lab = np.where(ok & (gt == "non-targeting"), "\0ctrl", np.where(ok, cat(h, "obs/perturbed_gene_name"), ""))
-            self.meta.append(lab)
-            axes.append((ids, names))
-            h.close()
-        common = set(axes[0][0])
-        for ids, _ in axes[1:]:
-            common &= set(ids)
-        ids0, names0 = axes[0]
-        keep = [j for j, g in enumerate(ids0) if g in common]
-        self.ensembl, self.genes = ids0[keep], names0[keep]
-        self.cols = []                                   # per donor: native column of each common gene
-        for ids, _ in axes:
-            pos = {g: j for j, g in enumerate(ids)}
-            self.cols.append(np.array([pos[g] for g in self.ensembl]))
-        self.targets = sorted(set(np.concatenate(self.meta)) - {"", "\0ctrl"})
-        self.provenance = dict(source=self.urls, n_genes_per_donor=[len(a[0]) for a in axes], n_common=len(self.genes),
+        self.files, self.meta, receipts = [], [], {}
+        for d in self.DONORS:
+            obs_path = self.RAW / "obs" / f"{d}_{cond}.obs.parquet"
+            r = json.loads(obs_path.with_suffix(".json").read_text())
+            if hashlib.sha256(obs_path.read_bytes()).hexdigest() != r["sha256"]:
+                raise SystemExit(f"{obs_path}: differs from its receipt")
+            receipts[obs_path.name] = r
+            o = pd.read_parquet(obs_path, columns=["lane_id", "guide_group", "guide_type", "low_quality",
+                                                   "perturbed_gene_name"])
+            ok = (o.guide_group == "targeting single sgRNA").to_numpy() & ~o.low_quality.astype(bool).to_numpy()
+            lab = np.where(ok & (o.guide_type == "non-targeting").to_numpy(), self.CTRL,
+                           np.where(ok, o.perturbed_gene_name.astype(str).to_numpy(), ""))
+            barcode = o.index.str.split("_").str[0].to_numpy()
+            lane = o.lane_id.astype(str).str.replace("CD4i_", "", regex=False).to_numpy()
+            for ln in sorted(set(lane)):
+                hit = sorted(self.RAW.glob(f"GSM*_CD4i_{ln}_{d}_{cond}_sample_filtered_feature_bc_matrix.h5"))
+                if len(hit) != 1:
+                    raise SystemExit(f"CD4 T {d} {cond} lane {ln}: {len(hit)} GEO matrices on disk")
+                path, receipts[hit[0].name] = raw_file("cd4t_marson2025", hit[0].name)
+                m = lane == ln
+                self.files.append((d, path))
+                self.meta.append((barcode[m], lab[m]))
+        # Sequencing runs list the same genes in different orders (by id or by position): every lane is mapped
+        # onto the first lane's gene order by Ensembl id.
+        self.cols = []
+        for _, path in self.files:
+            with h5py.File(path) as h:
+                f = h["matrix/features"]
+                ids, names = _dec(f["id"][:]), _dec(f["name"][:])
+                gex = _dec(f["feature_type"][:]) == "Gene Expression"
+            if not self.cols:
+                self.ensembl, self.genes = ids[gex], names[gex]
+            pos = pd.Index(ids).get_indexer(self.ensembl)
+            if set(ids[gex]) != set(self.ensembl) or (pos < 0).any():
+                raise SystemExit(f"{path}: its genes differ from the other lanes")
+            self.cols.append(pos)
+        labs = np.concatenate([lb for _, lb in self.meta])
+        self.targets = sorted(set(labs) - {"", self.CTRL})
+        self.provenance = dict(source="GEO GSE314342 per-lane matrices + S3 marson2025_data obs tables", cond=cond,
+                               n_lane_files=len(self.files), raw=receipts,
                                control="guide_type non-targeting, single sgRNA, not low_quality")
 
     def _iter(self, want_ctrl):
-        for u, lab, col in zip(self.urls, self.meta, self.cols):
-            h, _ = self.open_url(u)
-            n = len(lab)
-            for lo in range(0, n, CHUNK):
-                hi = min(lo + CHUNK, n)
-                lb = lab[lo:hi]
-                k = np.flatnonzero(lb == "\0ctrl") if want_ctrl else np.flatnonzero((lb != "") & (lb != "\0ctrl"))
-                X = x_rows(h, lo, hi)
-                if lo == 0:
-                    check_counts(X, u)
-                yield X[k][:, col], lb[k]
-            h.close()
+        for (donor, path), (bc, lab), cols in zip(self.files, self.meta, self.cols):
+            with h5py.File(path) as h:
+                m = h["matrix"]
+                n_feat, n_bc = (int(x) for x in m["shape"][:])
+                X = sp.csc_matrix((m["data"][:], m["indices"][:], m["indptr"][:]), shape=(n_feat, n_bc)).T.tocsr()
+                file_bc = _dec(m["barcodes"][:])
+            pos = pd.Index(file_bc).get_indexer(bc)
+            if (pos < 0).any():
+                raise SystemExit(f"{path}: {int((pos < 0).sum())} annotated cells missing from the GEO matrix")
+            k = np.flatnonzero(lab == self.CTRL) if want_ctrl else np.flatnonzero((lab != "") & (lab != self.CTRL))
+            Xk = X[pos[k]][:, cols].astype(np.float64)
+            check_counts(Xk, str(path))
+            yield Xk, lab[k], np.full(len(k), donor)
 
     def controls(self):
-        for X, _ in self._iter(True):
-            yield X
+        for X, _, bat in self._iter(True):
+            yield X, bat
 
     def cells(self):
         yield from self._iter(False)
 
 
 READERS = {"h1": H1, "scperturb": ScPerturb, "feng": Feng, "dld1": DLD1, "hesc": HESC, "viperturb": VIPerturb,
-           "orion": Orion, "remote_rows": RemoteRows, "kolf": Kolf, "cd4t": CD4T}
+           "orion": Orion, "replogle_rows": ReplogleRows, "kolf": Kolf, "cd4t": CD4T}

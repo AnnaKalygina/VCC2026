@@ -20,13 +20,20 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 from genes import GeneMap, load_vocab  # noqa: E402
 from readers import READERS  # noqa: E402
-from stats import MIN_UMI, Engine, write_h5  # noqa: E402
+from stats import MIN_UMI, Engine, batch_codes, write_h5  # noqa: E402
 
 T0 = time.time()
 
 
 def log(msg):
     print(f"[{(time.time() - T0) / 60:6.1f} min] {msg}", flush=True)
+
+
+def git_state():
+    """Commit and dirty flag of the code that produced an output (Snakemake does not rerun on code edits)."""
+    import subprocess
+    run = lambda *c: subprocess.run(["git", "-C", str(ROOT), *c], capture_output=True, text=True).stdout.strip()
+    return dict(commit=run("rev-parse", "HEAD"), dirty=bool(run("status", "--porcelain", "--untracked-files=no")))
 
 
 def canon_targets(raw, vocab):
@@ -61,51 +68,60 @@ def main():
     tmp = ROOT / "data/raw/_clean_tmp" / a.context            # staged raw files; deleted by src.cleanup()
     src = READERS[cfg["reader"]](tmp=tmp, **cfg.get("args", {}))
     gm = GeneMap(src.genes, src.ensembl, vocab, label=a.context)
+    min_umi = cfg.get("min_umi", MIN_UMI)
     qc = dict(ctrl_seen=0, ctrl_low_umi=0, pert_seen=0, pert_low_umi=0, pert_unlabelled=0)
 
     if hasattr(src, "run_blocks"):
         targets = canon_targets(np.asarray(src.targets), vocab)
         utg, t_of = np.unique(targets, return_inverse=True)
-        eng = Engine(len(gm.measured_idx), len(utg), seed=a.seed)
-        src.run_blocks(eng, gm, t_of, qc, log)
+        bl = src.batch_labels
+        batches = None if bl is None else sorted(set(bl[src.is_ctrl]))
+        eng = Engine(len(gm.measured_idx), len(utg), seed=a.seed, batches=batches)
+        src.run_blocks(eng, gm, t_of, qc, log, min_umi)
     else:
         # pass 1: control pool (needed in full before any perturbed cell: MWU reference, control halves)
-        Xs, Ls = [], []
-        for k, X in enumerate(src.controls()):
+        Xs, Ls, Bs = [], [], []
+        for k, (X, bat) in enumerate(src.controls()):
             if k % 5 == 0:
                 log(f"  pass 1: chunk {k}, {qc['ctrl_seen']:,} controls so far")
             Xm = gm.apply(X)
             L = np.asarray(Xm.sum(1)).ravel()
-            ok = L >= MIN_UMI
+            ok = L >= min_umi
             qc["ctrl_seen"] += len(L)
             qc["ctrl_low_umi"] += int((~ok).sum())
             Xs.append(Xm[np.flatnonzero(ok)].astype(np.float32))   # integer counts: exact in float32
             Ls.append(L[ok])
+            Bs.append(None if bat is None else np.asarray(bat).astype(str)[ok])
         Xc, Lc = sp.vstack(Xs, format="csr"), np.concatenate(Ls)
+        assert (src.batch_key is None) == all(b is None for b in Bs), "batches must come with every chunk or none"
+        Bc = None if src.batch_key is None else np.concatenate(Bs)
+        batches = None if Bc is None else sorted(set(Bc))
         del Xs
-        log(f"controls: {Xc.shape[0]:,} kept of {qc['ctrl_seen']:,} ({qc['ctrl_low_umi']:,} < {MIN_UMI} UMI), "
+        log(f"controls: {Xc.shape[0]:,} kept of {qc['ctrl_seen']:,} ({qc['ctrl_low_umi']:,} < {min_umi} UMI), "
             f"median depth {np.median(Lc):,.0f}")
         targets_raw = np.asarray(src.targets)
         targets = canon_targets(targets_raw, vocab)
         utg, inv = np.unique(targets, return_inverse=True)
         t_of = dict(zip(targets_raw, inv))
-        eng = Engine(len(gm.measured_idx), len(utg), seed=a.seed)
-        eng.set_controls(Xc, Lc)
+        eng = Engine(len(gm.measured_idx), len(utg), seed=a.seed, batches=batches)
+        eng.set_controls(Xc, Lc, batch=None if Bc is None else batch_codes(Bc, batches))
         del Xc
-        log(f"engine: {len(utg):,} targets x {len(gm.measured_idx):,} genes")
+        log(f"engine: {len(utg):,} targets x {len(gm.measured_idx):,} genes"
+            + ("" if batches is None else f", {len(batches)} control batches ({src.batch_key})"))
         # pass 2: perturbed cells
         k = 0
-        for X, lab in src.cells():
+        for X, lab, bat in src.cells():
             Xm = gm.apply(X)
             L = np.asarray(Xm.sum(1)).ravel()
             g = np.array([t_of.get(t, -1) for t in lab], np.int64)
             qc["pert_seen"] += len(L)
             qc["pert_unlabelled"] += int((g < 0).sum())
-            low = L < MIN_UMI
+            low = L < min_umi
             qc["pert_low_umi"] += int((low & (g >= 0)).sum())
             keep = np.flatnonzero(~low & (g >= 0))
             if len(keep):
-                eng.add(Xm[keep], L[keep], g[keep])
+                eng.add(Xm[keep], L[keep], g[keep],
+                        batch=None if batches is None else batch_codes(np.asarray(bat)[keep], batches))
             k += 1
             if k % 20 == 0:
                 log(f"  pass 2: {qc['pert_seen']:,} perturbed cells")
@@ -125,9 +141,9 @@ def main():
     if not keep_t.all():
         print(f"WARNING: {(~keep_t).sum()} target groups dropped (0 cells after QC, or non-chosen TSS): "
               f"{list(np.asarray(utg)[~keep_t][:20])}")
-        for k in ("mean_cpm", "lfc", "disp", "nlog10p", "reliability_r", "reliability_mean", "reliability_sb",
-                  "n_cells", "depth_mean", "depth_median"):
-            res[k] = res[k][keep_t]
+        for k, v in res.items():
+            if isinstance(v, np.ndarray) and v.shape[:1] == keep_t.shape:
+                res[k] = v[keep_t]
         utg = utg[keep_t]
 
     # validation (fatal where a violation means a bug, not a data property)
@@ -138,6 +154,9 @@ def main():
                n_lfc_nonfinite=int((~np.isfinite(res["lfc"])).sum()),
                n_nlog10p_nonfinite=int((~np.isfinite(res["nlog10p"])).sum()),
                n_reliable_targets=int(np.isfinite(res["reliability_mean"]).sum()),
+               median_batch_shift_rms=float(np.nanmedian(res["batch_shift_rms"]))
+               if np.isfinite(res.get("batch_shift_rms", np.zeros(0))).any() else None,
+               median_frac_no_ctrl=float(np.nanmedian(res["frac_no_ctrl"])) if "frac_no_ctrl" in res else None,
                median_reliability_sb=float(np.nanmedian(res["reliability_sb"])) if np.isfinite(res["reliability_sb"]).any() else None)
     assert abs(chk["ctrl_cpm_sum"] - 1e6) < 1e6 * 1e-4, chk
     assert chk["n_lfc_nonfinite"] == 0 and chk["n_nlog10p_nonfinite"] == 0, chk
@@ -145,15 +164,21 @@ def main():
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    attrs = dict(dataset=a.context.split("__")[0], context=a.context, min_umi=MIN_UMI, L_def="vocab",
+    attrs = dict(dataset=a.context.split("__")[0], context=a.context, min_umi=min_umi, L_def="vocab",
                  cpm="arithmetic mean of c/L*1e6", lfc="log2((pert+1e-9)/(ctrl+1e-9)), ungated",
                  pvalue="nlog10p = -log10 two-sided MWU (pdex formula, full control pool), ungated",
                  disp="NB method of moments, unclamped", reliability="8 half-splits, log1p CP10k, Pearson, SB",
+                 se_cpm="sqrt(var(CPM) / n) per gene", half_delta="split 0 half deltas of mean log1p CP10k vs control",
+                 batch_key=str(src.batch_key),
+                 lfc_batchmatched="log2((pert+1e-9)/(ctrl_ref+1e-9)), ctrl_ref = per-batch control mean CPM weighted "
+                                  "by the target's cells per batch; batches with < 20 controls excluded; "
+                                  "MWU p stays against the pooled controls",
                  seed=a.seed, source=json.dumps(src.provenance))
     tmp = out / f"{a.context}.h5.tmp"
     write_h5(tmp, res, vocab, gm.measured_idx, utg, attrs)
     tmp.rename(out / f"{a.context}.h5")
     prov = dict(context=a.context, reader=cfg["reader"], args=cfg.get("args", {}), source=src.provenance,
+                code=git_state(), batch_key=src.batch_key, n_control_batches=None if "batches" not in res else len(res["batches"]),
                 genes=gm.report, qc=qc, n_targets=int(len(utg)), n_ctrl=int(c["n_cells"]), checks=chk,
                 minutes=round((time.time() - T0) / 60, 1),
                 peak_rss_gb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6, 2))
