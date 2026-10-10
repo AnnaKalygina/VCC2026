@@ -84,7 +84,7 @@ rule summarize:
         context="|".join(CTX),
     input:
         vocabulary="data/vcc2026/gene_names.csv",
-        ensembl="data/vocab_ensembl.tsv",
+        ensembl=ancient("data/vocab_ensembl.tsv"),       # built once; a rebuild must not rerun every summary
         source=lambda wc: PREP.get(CTX[wc.context]["reader"], []),
     output: h5="data/{context}.h5", json="data/{context}.json"
     log: "logs/stats/{context}.log"
