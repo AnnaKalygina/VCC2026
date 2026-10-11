@@ -399,7 +399,8 @@ class Feng:
 class DLD1:
     """GEO GSE337988 Low-MOI dense h5 + colData; cell QC as ingest_gse337988.cell_table (hashtag + guide
     singlets, second caller agrees, no NTC_MENG). Groups are TSS groups; post_result keeps one TSS per
-    gene: the strongest own-gene knockdown among TSS groups with >= 20 cells (else the largest group)."""
+    gene: the strongest own-gene knockdown in half A of the split-0 halves among TSS groups with >= 20 cells (else
+    the largest group), so the choice does not rest on the full set of cells it then summarizes."""
     URL = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE337nnn/GSE337988/suppl/GSE337988_sublib2_processed_objects_Low_assays.h5"
     batch_key = "colData Sample (10x channel)"
 
@@ -454,8 +455,9 @@ class DLD1:
         for g in np.unique(genes):
             k = np.flatnonzero(genes == g)
             big = k[res["n_cells"][k] >= 20]
-            if len(big) and own_idx[big[0]] >= 0:
-                keep.append(big[np.argmin(res["lfc"][big, own_idx[big[0]]])])
+            kd = res["half_delta_A"][big, own_idx[big[0]]] if len(big) and own_idx[big[0]] >= 0 else []
+            if np.isfinite(kd).any():                   # chosen on half A of the cells, not on the cells it reports
+                keep.append(big[np.nanargmin(kd)])
             else:
                 keep.append(k[np.argmax(res["n_cells"][k])])
         keep = np.array(sorted(keep))
