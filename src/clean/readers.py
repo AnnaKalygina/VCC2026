@@ -512,7 +512,7 @@ class VIPerturb:
     """Zenodo 18460279 genome_wide_bin{A,B,C}.RDS -> scripts/viperturb_extract.R triplets (one bin on disk at a
     time). All three bins carry the SAME non-targeting cells (the manifest lists 7,949 in each; cells() checks the
     barcodes bin by bin), so controls come from bin A only."""
-    batch_key = None
+    batch_key = "meta.data sample (10x lane)"
     ZEN = "https://zenodo.org/api/records/18460279"
 
     def __init__(self, tmp):
@@ -547,7 +547,8 @@ class VIPerturb:
         cells = np.array(open(d / "cells.txt").read().splitlines())
         meta = pd.read_csv(d / "meta.csv", low_memory=False)
         meta["cell"] = meta["cell"].astype(str)
-        lab = self.m.labels(meta.set_index("cell").loc[cells]).astype(str)
+        meta = meta.set_index("cell").loc[cells]
+        lab, lane = self.m.labels(meta).astype(str), meta["sample"].astype(str).to_numpy()
         ctrl_cells = set(cells[lab == self.m.CTRL])
         if want_ctrl:
             self.ctrl_cells = ctrl_cells
@@ -561,16 +562,16 @@ class VIPerturb:
                 continue
             X = sp.csr_matrix((np.asarray(x[p[lo]:p[hi]], np.float64), np.asarray(i[p[lo]:p[hi]]), p[lo:hi + 1] - p[lo]),
                               shape=(hi - lo, G))[k]
-            yield X, lab[lo:hi][k]
+            yield X, lab[lo:hi][k], lane[lo:hi][k]
 
     def controls(self):
-        for X, _ in self._bin("A", True):
-            yield X, None
+        for X, _, lane in self._bin("A", True):
+            yield X, lane
 
     def cells(self):
         for b in self.m.BINS:
-            for X, lab in self._bin(b, False):
-                yield X, lab, None
+            for X, lab, lane in self._bin(b, False):
+                yield X, lab, lane
             shutil.rmtree(self.tmp / f"bin{b}")
 
     def cleanup(self):
