@@ -745,6 +745,7 @@ class CD4T:
     DONORS = ("D1", "D2", "D3", "D4")
     RAW = ROOT / "data/raw/cd4t_marson2025"
     CTRL = "\0ctrl"
+    MAX_MISSING = 0.05                                   # largest share of a lane's annotated cells GEO may lack
     batch_key = "donor"
 
     def __init__(self, cond, tmp=None):
@@ -798,9 +799,14 @@ class CD4T:
                 X = sp.csc_matrix((m["data"][:], m["indices"][:], m["indptr"][:]), shape=(n_feat, n_bc)).T.tocsr()
                 file_bc = _dec(m["barcodes"][:])
             pos = pd.Index(file_bc).get_indexer(bc)
-            if (pos < 0).any():
+            # GEO's Cell Ranger cell calls drop a few of the authors' cells in some lanes (resting: lane R1L06 of
+            # D1 and D2, 7,605 of 11.5M cells, spread over guide groups like the whole lane); dropped and recorded
+            if (pos < 0).mean() > self.MAX_MISSING:
                 raise SystemExit(f"{path}: {int((pos < 0).sum())} annotated cells missing from the GEO matrix")
-            k = np.flatnonzero(lab == self.CTRL) if want_ctrl else np.flatnonzero((lab != "") & (lab != self.CTRL))
+            if (pos < 0).any() and want_ctrl:
+                self.provenance.setdefault("annotated_cells_missing_from_geo", {})[path.name] = int((pos < 0).sum())
+            sel = (lab == self.CTRL) if want_ctrl else ((lab != "") & (lab != self.CTRL))
+            k = np.flatnonzero(sel & (pos >= 0))
             yield X[pos[k]][:, cols].astype(np.float64), lab[k], np.full(len(k), donor)
 
     def controls(self):
