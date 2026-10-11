@@ -465,8 +465,8 @@ class DLD1:
 
 # ----------------------------------------------------------------------------------- GSE295214 hESC
 class HESC:
-    """GEO GSE295214: 85 Cell Ranger h5 from data/raw, guide calling as
-    ingest_gse295214.read_sample (top construct >= 5 UMI and >= 50% of guide UMIs)."""
+    """GEO GSE295214: 85 Cell Ranger h5 from data/raw, guide calling as ingest_gse295214.read_sample (guide UMIs
+    summed per gene; top gene >= 5 UMI, every other gene <= 0.2 x the top gene)."""
     batch_key = "GEO sample file (10x lane)"
 
     N_SAMPLES = 85
@@ -484,12 +484,12 @@ class HESC:
             self.ensembl = h["matrix/features/id"][:].astype(str)[ft == "Gene Expression"]
         self.CTRL = "non-targeting"
         self.targets = None
-        self.provenance = dict(source="GEO GSE295214 (85 filtered_feature_bc_matrix.h5)", guide_calling="min_umi 5, min_frac 0.5",
+        self.provenance = dict(source="GEO GSE295214 (85 filtered_feature_bc_matrix.h5)", guide_calling="per gene: top >= 5 UMI, second <= 0.2 x top",
                                n_samples=len(self.files))
 
     def _iter(self):
         for p in self.files:
-            g, X, tgt, rate = self.m.read_sample(str(p), 5, 0.5)
+            g, X, tgt, rate = self.m.read_sample(str(p), 5, 0.2)
             assert list(g) == list(self.genes), f"{p}: gene axis differs"
             yield X, tgt, Path(p).name
 

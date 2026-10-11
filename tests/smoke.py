@@ -125,6 +125,21 @@ c, lab = frangieh_labels(np.array(['A_1', 'A_1;A_3', 'A_1;B_2', 'NO_SITE_4', 'NO
                                    'A_1;NO_SITE_2', 'A_1;NO_S', np.nan], dtype=object))
 assert c.tolist() == [0, 0, 0, 1, 1, 0, 0, 0] and lab.tolist() == ['A', 'A', '', '', '', 'A', '', '']
 
+# hESC guide calling (AUDIT S9): guides summed per gene, top >= 5 UMI, second gene <= 0.2 x top.
+from ingest_gse295214 import read_sample
+with tempfile.TemporaryDirectory() as name:
+    f = Path(name) / 'lane.h5'
+    names = ['G1', 'G2', 'A_1', 'A_2', 'B_1', 'non-targeting_1']
+    guides = np.array([[5, 3, 0, 0], [10, 0, 3, 0], [10, 0, 2, 0], [4, 0, 0, 0], [0, 0, 0, 6]])
+    M = sp.csc_matrix(np.c_[np.ones((5, 2), int), guides].T)
+    with h5py.File(f, 'w') as h:
+        for k, v in dict(data=M.data, indices=M.indices, indptr=M.indptr, shape=M.shape).items():
+            h[f'matrix/{k}'] = v
+        h['matrix/features/name'] = np.array(names, dtype='S')
+        h['matrix/features/feature_type'] = np.array(['Gene Expression'] * 2 + ['CRISPR Guide Capture'] * 4, dtype='S')
+    _, X, tgt, rate = read_sample(str(f), 5, 0.2)
+    assert tgt.tolist() == ['A', 'A', 'non-targeting'] and X.shape == (3, 2) and rate == 0.6
+
 p, alpha, libs = fit_control(ctrl)
 y = encode_decoupled(p, p, alpha, libs, np.zeros(24), np.zeros(24), 8, rng)
 assert y.shape == (8, 24) and (y >= 0).all() and np.equal(y, np.rint(y)).all()
