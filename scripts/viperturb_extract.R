@@ -85,8 +85,8 @@ for (k in colnames(md)) {
   if (u <= 40) print(head(sort(table(v, useNA = "ifany"), decreasing = TRUE), 40))
   else if (!is.numeric(v)) print(head(sort(table(v, useNA = "ifany"), decreasing = TRUE), 8))
 }
-data.table::fwrite(cbind(data.frame(cell = rownames(md), stringsAsFactors = FALSE), md),
-                   file.path(outdir, "meta.csv"))   # uncompressed: the cluster data.table has no zlib
+write.csv(cbind(data.frame(cell = rownames(md), stringsAsFactors = FALSE), md),
+          file.path(outdir, "meta.csv"), row.names = FALSE)   # base R: the pixi environment has no data.table
 
 # --- counts: chunked writeBin (a single call is capped at 2^31-1 bytes) ------------------------
 wr <- function(v, path, as_int) {
