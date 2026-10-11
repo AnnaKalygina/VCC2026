@@ -30,11 +30,15 @@ def cat(h, key):
     """An AnnData categorical obs/var column as strings, in either of the two on-disk layouts."""
     node = h[key]
     if isinstance(node, h5py.Group):                          # anndata >= 0.8: obs/<k>/{categories,codes}
-        return _dec(node["categories"][:])[node["codes"][:]]
-    parent, leaf = key.rsplit("/", 1)
-    legacy = f"{parent}/__categories/{leaf}"                  # anndata < 0.8: obs/__categories/<k>
-    if legacy in h:
-        return _dec(h[legacy][:])[node[:]]
+        cats, codes = node["categories"][:], node["codes"][:]
+    else:
+        parent, leaf = key.rsplit("/", 1)
+        legacy = f"{parent}/__categories/{leaf}"              # anndata < 0.8: obs/__categories/<k>
+        cats, codes = (h[legacy][:], node[:]) if legacy in h else (None, None)
+    if cats is not None:
+        if (codes < 0).any():                                 # -1 = missing; indexing would return the last category
+            raise SystemExit(f"{key}: {int((codes < 0).sum())} missing values")
+        return _dec(cats)[codes]
     if node.dtype.kind in "SO":
         return _dec(node[:])
     raise SystemExit(f"{key} is neither categorical nor a string dataset (dtype {node.dtype})")
