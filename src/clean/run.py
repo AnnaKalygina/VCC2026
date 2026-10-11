@@ -19,7 +19,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 from genes import GeneMap, load_vocab  # noqa: E402
-from readers import READERS  # noqa: E402
+from labels import TargetLabels  # noqa: E402
+from readers import READERS, check_counts  # noqa: E402
 from stats import MIN_UMI, Engine, batch_codes, write_h5  # noqa: E402
 
 T0 = time.time()
@@ -36,21 +37,14 @@ def git_state():
     return dict(commit=run("rev-parse", "HEAD"), dirty=bool(run("status", "--porcelain", "--untracked-files=no")))
 
 
-def canon_targets(raw, vocab):
-    """Target label -> vocab symbol (exact, else unique case-insensitive), else the label itself."""
-    vi = set(vocab)
-    up = {}
-    for g in vocab:
-        up.setdefault(g.upper(), []).append(g)
-    out = []
-    for t in raw:
-        if t in vi:
-            out.append(t)
-        elif len(up.get(t.upper(), [])) == 1:
-            out.append(up[t.upper()][0])
-        else:
-            out.append(t)
-    return np.array(out)
+def target_index(raw, name_of):
+    """Raw target labels -> (unique names, index per raw label; -1 where the label is dropped)."""
+    names = np.array([name_of(t) for t in raw], dtype=object)
+    keep = names != ""
+    utg, inv = np.unique(names[keep].astype(str), return_inverse=True)
+    idx = np.full(len(raw), -1, np.int64)
+    idx[keep] = inv
+    return utg, idx
 
 
 def main():
@@ -68,12 +62,17 @@ def main():
     tmp = ROOT / "data/raw/_clean_tmp" / a.context            # staged raw files; deleted by src.cleanup()
     src = READERS[cfg["reader"]](tmp=tmp, **cfg.get("args", {}))
     gm = GeneMap(src.genes, src.ensembl, vocab, label=a.context)
+    tl = TargetLabels(vocab, gm, src.genes)
+    # TSS-group readers (DLD1) keep their group names; their gene symbols go through the same rule below
+    name_of = (lambda t: t) if hasattr(src, "target_symbol") else (lambda t: tl(t)[0])
+    cells_of = {}                                         # raw label -> perturbed cells seen
     min_umi = cfg.get("min_umi", MIN_UMI)
     qc = dict(ctrl_seen=0, ctrl_low_umi=0, pert_seen=0, pert_low_umi=0, pert_unlabelled=0)
 
     if hasattr(src, "run_blocks"):
-        targets = canon_targets(np.asarray(src.targets), vocab)
-        utg, t_of = np.unique(targets, return_inverse=True)
+        utg, t_of = target_index(np.asarray(src.targets), name_of)
+        lb, n = np.unique(src.lab[~src.is_ctrl], return_counts=True)
+        cells_of.update(zip(lb, n))
         bl = src.batch_labels
         batches = None if bl is None else sorted(set(bl[src.is_ctrl]))
         eng = Engine(len(gm.measured_idx), len(utg), seed=a.seed, batches=batches)
@@ -100,9 +99,8 @@ def main():
         log(f"controls: {Xc.shape[0]:,} kept of {qc['ctrl_seen']:,} ({qc['ctrl_low_umi']:,} < {min_umi} UMI), "
             f"median depth {np.median(Lc):,.0f}")
         targets_raw = np.asarray(src.targets)
-        targets = canon_targets(targets_raw, vocab)
-        utg, inv = np.unique(targets, return_inverse=True)
-        t_of = dict(zip(targets_raw, inv))
+        utg, inv = target_index(targets_raw, name_of)
+        t_of = {t: i for t, i in zip(targets_raw, inv) if i >= 0}
         eng = Engine(len(gm.measured_idx), len(utg), seed=a.seed, batches=batches)
         eng.set_controls(Xc, Lc, batch=None if Bc is None else batch_codes(Bc, batches))
         del Xc
@@ -111,6 +109,10 @@ def main():
         # pass 2: perturbed cells
         k = 0
         for X, lab, bat in src.cells():
+            check_counts(X, f"{a.context} cells chunk {k}")
+            lb, n = np.unique(np.asarray(lab).astype(str), return_counts=True)
+            for t, c in zip(lb, n):
+                cells_of[t] = cells_of.get(t, 0) + int(c)
             Xm = gm.apply(X)
             L = np.asarray(Xm.sum(1)).ravel()
             g = np.array([t_of.get(t, -1) for t in lab], np.int64)
@@ -126,15 +128,22 @@ def main():
             if k % 20 == 0:
                 log(f"  pass 2: {qc['pert_seen']:,} perturbed cells")
     log(f"QC: {qc}")
-    sym = [src.target_symbol(t) for t in utg] if hasattr(src, "target_symbol") else list(utg)
+    if hasattr(src, "target_symbol"):
+        sym = [tl(src.target_symbol(t))[0] for t in utg]
+        for t in utg:
+            g = src.target_symbol(t)
+            cells_of[g] = cells_of.get(g, 0) + cells_of.get(t, 0)
+    else:
+        sym = list(utg)
     own = gm.vocab_index(sym, vocab)                    # measured index of each target's own gene
     res = eng.result(own)
     del eng
     keep_t = res["n_cells"] > 0
     if hasattr(src, "post_result"):        # e.g. DLD1: one TSS group per gene
         new_utg, idx = src.post_result(utg, res, own)
+        new_utg = np.array([tl(g)[0] for g in new_utg], dtype=object)
         keep_t = np.zeros(len(utg), bool)
-        keep_t[idx] = True
+        keep_t[idx[new_utg != ""]] = True
         keep_t &= res["n_cells"] > 0
         utg = np.asarray(utg, object).copy()
         utg[idx] = new_utg
@@ -179,7 +188,7 @@ def main():
     tmp.rename(out / f"{a.context}.h5")
     prov = dict(context=a.context, reader=cfg["reader"], args=cfg.get("args", {}), source=src.provenance,
                 code=git_state(), batch_key=src.batch_key, n_control_batches=None if "batches" not in res else len(res["batches"]),
-                genes=gm.report, qc=qc, n_targets=int(len(utg)), n_ctrl=int(c["n_cells"]), checks=chk,
+                genes=gm.report, target_labels=tl.report(cells_of), qc=qc, n_targets=int(len(utg)), n_ctrl=int(c["n_cells"]), checks=chk,
                 minutes=round((time.time() - T0) / 60, 1),
                 peak_rss_gb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6, 2))
     json.dump(prov, open(out / f"{a.context}.json", "w"), indent=1)

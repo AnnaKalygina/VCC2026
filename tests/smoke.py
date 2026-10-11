@@ -107,6 +107,18 @@ rg = eg.result(np.array([-1, -1]))
 for k in ('mean_cpm', 'lfc', 'nlog10p', 'se_cpm', 'lfc_batchmatched', 'half_delta_A', 'reliability_r', 'mean_cpm_by_batch'):
     np.testing.assert_allclose(rg[k], rb[k], rtol=1e-5, atol=1e-6, err_msg=k)
 
+# One target-label rule for every reader (AUDIT S10).
+from labels import TargetLabels
+from types import SimpleNamespace
+vocab = np.array(['HLA-B', 'HSPE1', 'MOB4', 'AARS1', 'G1'])
+tl = TargetLabels(vocab, SimpleNamespace(vocab_of=np.array([3, -1])), np.array(['AARS', 'XYZ']))
+for raw, want in [('*', ('', 'sentinel')), ('nan', ('', 'sentinel')), ('HLA-B', ('HLA-B', 'exact')),
+                  ('hla-b', ('HLA-B', 'case')), ('HLA_B', ('HLA-B', 'underscore')), ('AARS', ('AARS1', 'deposit_gene_axis')),
+                  ('HSPE1_MOB4', ('', 'multi_gene')), ('XYZ', ('XYZ', 'not_in_panel'))]:
+    assert tl(raw) == want, (raw, tl(raw))
+rep = tl.report({'XYZ': 7})
+assert rep['actions']['sentinel'] == 2 and {r['raw'] for r in rep['changed']} == {'*', 'nan', 'hla-b', 'HLA_B', 'AARS', 'HSPE1_MOB4', 'XYZ'}
+
 p, alpha, libs = fit_control(ctrl)
 y = encode_decoupled(p, p, alpha, libs, np.zeros(24), np.zeros(24), 8, rng)
 assert y.shape == (8, 24) and (y >= 0).all() and np.equal(y, np.rint(y)).all()

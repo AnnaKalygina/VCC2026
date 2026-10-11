@@ -66,6 +66,7 @@ class GeneMap:
                 continue
             tgt[k], how[k] = v, h
             taken.add(v)
+        self.vocab_of = tgt                                   # vocab position per native feature, -1 if dropped
         how = np.bincount(how, minlength=4)
         keep = np.flatnonzero(tgt >= 0)
         self.measured_idx = np.unique(tgt[keep])               # sorted vocab positions

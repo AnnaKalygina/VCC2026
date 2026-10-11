@@ -63,7 +63,15 @@ def geo_samples(acc, source, keep):
     return out
 
 
+def hgnc():
+    """HGNC complete set, monthly release pinned 2026-10-11: previous and alias symbols for the target-label report."""
+    name = 'hgnc_complete_set_2026-10-06.txt'
+    return [dict(source='hgnc', name=name, size=16973125, md5='af43fd56a64ad57c0fcc72d6ef65e516',
+                 url=f'https://storage.googleapis.com/public-download-files/hgnc/archive/archive/monthly/tsv/{name}')]
+
+
 SOURCES = [
+    hgnc,
     lambda: figshare(20029387, ['K562_essential_raw_singlecell_01.h5ad', 'rpe1_raw_singlecell_01.h5ad'], 'replogle2022'),
     lambda: zenodo(7416068, ['FrangiehIzar2021_RNA.h5ad'], 'scperturb'),
     lambda: figshare(27989294, ['GenomeWideScreen_FitnessGenes_RNA-UMI-Counts.csv.gz',
