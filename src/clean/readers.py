@@ -17,6 +17,7 @@ original ingest code; the generic vocab-UMI filter (per-context min_umi) is appl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -248,6 +249,31 @@ def run_gene_major(blocks, eng, L, grp, is_ctrl, qc, log, min_umi, batch_labels=
 
 
 # ----------------------------------------------------------------------------------- scPerturb
+FRANGIEH_CTRL_GUIDES = ("NO_SITE", "ONE_NON-GENE_SITE")
+
+
+def frangieh_labels(guide_id):
+    """Per cell (is_control, target) from Frangieh's guide_id ('GENE_k;NO_SITE_j;...'). The `perturbation` column
+    hides multi-guide cells (AUDIT S2), so: control = only NO_SITE / ONE_NON-GENE_SITE guides; perturbed = guides
+    of exactly one gene (any number of its guides, control guides allowed); dropped (target "") = no guide, two or
+    more genes, or a guide name cut off by the deposit's 100-character limit (only cells with 8+ guides)."""
+    guide = re.compile(r"^(.+)_(\d+)$")
+    is_ctrl = np.zeros(len(guide_id), bool)
+    lab = np.full(len(guide_id), "", dtype=object)
+    for i, g in enumerate(guide_id):
+        if not isinstance(g, str) or g in ("", "nan"):
+            continue
+        hits = [guide.match(t) for t in g.split(";")]
+        if not all(hits):
+            continue
+        genes = {h.group(1) for h in hits} - set(FRANGIEH_CTRL_GUIDES)
+        if not genes:
+            is_ctrl[i] = True
+        elif len(genes) == 1:
+            lab[i] = genes.pop()
+    return is_ctrl, lab
+
+
 class ScPerturb:
     """Zenodo 7416068 h5ad (md5-pinned by scripts/summarize_scperturb.py). Single-gene perturbations only."""
     batch_key = None
@@ -271,9 +297,8 @@ class ScPerturb:
         if study == "adamson":
             is_ctrl = raw.str.contains(r"\(", regex=True, na=False).to_numpy()   # parenthesised control constructs
             tg = raw.fillna("").str.split("_").str[0].to_numpy()                   # strip plasmid id
-        else:
-            is_ctrl = raw.str.lower().str.strip().isin(S.CONTROL_LABELS).to_numpy()
-            tg = raw.fillna("").str.strip().to_numpy()
+        else:                                                                     # frangieh
+            is_ctrl, tg = frangieh_labels(a.obs["guide_id"].astype(object).to_numpy())
         compound = pd.Series(tg).str.contains(r"[+;,]").to_numpy()
         lab = np.where(is_ctrl, "", np.where(compound, "", tg)).astype(object)
         inctx = ctx == context
@@ -283,7 +308,10 @@ class ScPerturb:
         self.targets = sorted(set(lab[self.pert_rows]) - {""})
         self.provenance = dict(source=S.RECORD.format(S.STUDIES[study][0]), md5=S.STUDIES[study][1],
                                matrix=self.matrix_field, perturbation_col=col, condition=cinfo,
-                               n_compound_dropped=int((inctx & ~is_ctrl & compound).sum()), raw=receipt)
+                               n_compound_dropped=int((inctx & ~is_ctrl & compound).sum()), raw=receipt,
+                               control="parenthesised constructs" if study == "adamson" else
+                               "only NO_SITE / ONE_NON-GENE_SITE guides; perturbed = guides of exactly one gene",
+                               n_unassigned_dropped=int((inctx & ~is_ctrl & (lab == "")).sum()))
 
     def controls(self):
         for lo in range(0, len(self.ctrl_rows), CHUNK):

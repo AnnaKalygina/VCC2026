@@ -119,6 +119,12 @@ for raw, want in [('*', ('', 'sentinel')), ('nan', ('', 'sentinel')), ('HLA-B', 
 rep = tl.report({'XYZ': 7})
 assert rep['actions']['sentinel'] == 2 and {r['raw'] for r in rep['changed']} == {'*', 'nan', 'hla-b', 'HLA_B', 'AARS', 'HSPE1_MOB4', 'XYZ'}
 
+# Frangieh guides (AUDIT S2): one gene (any of its guides, control guides allowed) or only control guides.
+from readers import frangieh_labels
+c, lab = frangieh_labels(np.array(['A_1', 'A_1;A_3', 'A_1;B_2', 'NO_SITE_4', 'NO_SITE_4;ONE_NON-GENE_SITE_9',
+                                   'A_1;NO_SITE_2', 'A_1;NO_S', np.nan], dtype=object))
+assert c.tolist() == [0, 0, 0, 1, 1, 0, 0, 0] and lab.tolist() == ['A', 'A', '', '', '', 'A', '', '']
+
 p, alpha, libs = fit_control(ctrl)
 y = encode_decoupled(p, p, alpha, libs, np.zeros(24), np.zeros(24), 8, rng)
 assert y.shape == (8, 24) and (y >= 0).all() and np.equal(y, np.rint(y)).all()
