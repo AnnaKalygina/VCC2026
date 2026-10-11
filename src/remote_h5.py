@@ -80,8 +80,9 @@ class HTTPRangeFile(io.RawIOBase):
                 url = self._signed or self._resolve()
                 req = urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})
                 with urllib.request.urlopen(req, timeout=300) as resp:
-                    if resp.status not in (200, 206):
-                        raise RuntimeError(f"range read returned HTTP {resp.status}")
+                    # 200 means the server ignored Range and sent the whole object: only valid if that is the range
+                    if resp.status != 206 and not (resp.status == 200 and start == 0 and end == self.size - 1):
+                        raise RuntimeError(f"range read {start}-{end} returned HTTP {resp.status}")
                     status, content = resp.status, resp.read()
             except urllib.error.HTTPError as e:
                 if e.code in (400, 403):
