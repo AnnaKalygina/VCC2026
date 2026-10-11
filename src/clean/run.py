@@ -54,6 +54,7 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "data"))
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
+    code = git_state()                                    # at start: the code this run actually loaded
     if not os.environ.get("SLURM_JOB_ID"):
         ap.error("Real statistics processing requires Slurm")
     os.chdir(ROOT)
@@ -188,7 +189,7 @@ def main():
     write_h5(tmp, res, vocab, gm.measured_idx, utg, attrs)
     tmp.rename(out / f"{a.context}.h5")
     prov = dict(context=a.context, reader=cfg["reader"], args=cfg.get("args", {}), source=src.provenance,
-                code=git_state(), batch_key=src.batch_key, n_control_batches=None if "batches" not in res else len(res["batches"]),
+                code=code, batch_key=src.batch_key, n_control_batches=None if "batches" not in res else len(res["batches"]),
                 genes=gm.report, target_labels=tl.report(cells_of), qc=qc, n_targets=int(len(utg)), n_ctrl=int(c["n_cells"]), checks=chk,
                 minutes=round((time.time() - T0) / 60, 1),
                 peak_rss_gb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6, 2))
