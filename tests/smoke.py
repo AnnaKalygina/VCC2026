@@ -116,8 +116,11 @@ for raw, want in [('*', ('', 'sentinel')), ('nan', ('', 'sentinel')), ('HLA-B', 
                   ('hla-b', ('HLA-B', 'case')), ('HLA_B', ('HLA-B', 'underscore')), ('AARS', ('AARS1', 'deposit_gene_axis')),
                   ('HSPE1_MOB4', ('', 'multi_gene')), ('XYZ', ('XYZ', 'not_in_panel'))]:
     assert tl(raw) == want, (raw, tl(raw))
+tl.hgnc = {'MOB4A': ('MOB4', 'previous')}
+assert tl('MOB4A') == ('MOB4', 'hgnc_previous') and tl('MOB4') == ('MOB4', 'exact')
 rep = tl.report({'XYZ': 7})
-assert rep['actions']['sentinel'] == 2 and {r['raw'] for r in rep['changed']} == {'*', 'nan', 'hla-b', 'HLA_B', 'AARS', 'HSPE1_MOB4', 'XYZ'}
+assert rep['actions']['sentinel'] == 2 and {r['raw'] for r in rep['changed']} == {'*', 'nan', 'hla-b', 'HLA_B', 'AARS', 'HSPE1_MOB4', 'XYZ', 'MOB4A'}
+assert [r['merged_with'] for r in rep['changed'] if r['raw'] == 'MOB4A'] == [['MOB4']]
 
 # Frangieh guides (AUDIT S2): one gene (any of its guides, control guides allowed) or only control guides.
 from readers import frangieh_labels

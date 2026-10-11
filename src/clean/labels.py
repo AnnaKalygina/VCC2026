@@ -3,8 +3,10 @@
 Order: drop sentinels (`*`, `nan`, empty, ...); exact panel symbol; unique case-insensitive match; underscore
 written for a hyphen (`HLA_B` -> `HLA-B`); the deposit's own gene axis (the label is a native gene symbol that the
 gene map joined to exactly one panel gene, e.g. by Ensembl id); two or more panel genes joined by a separator
-(`HSPE1_MOB4`, shared promoters) are dropped as ambiguous. Everything else keeps its label and is reported, with
-the HGNC previous/alias symbol that points to exactly one panel gene as a suggestion only (never applied).
+(`HSPE1_MOB4`, shared promoters) are dropped as ambiguous; an HGNC previous or alias symbol that points to exactly
+one panel gene is renamed to it (`ATP5A1` -> `ATP5F1A`). Everything else keeps its label and is reported. Every label
+that is not an exact panel symbol is listed in the report, with the panel gene it became and the other raw labels
+that became the same gene.
 """
 import re
 from pathlib import Path
@@ -19,27 +21,31 @@ SEP = re.compile(r"[_+;,]")
 
 
 def hgnc_suggestions(vocab):
-    """HGNC approved/previous/alias symbol -> the one panel symbol of the same HGNC record (approved symbol hits
-    first, then previous, then alias); names that point to several panel genes are left out."""
+    """HGNC symbol -> (the one panel gene of the same HGNC record, which kind of name the label is: approved,
+    previous or alias). A panel name counts for a record only if it is that record's approved symbol or no other
+    record's approved symbol (the panel's ATR is the kinase, not SERPINA2's alias), and a label that is some gene's
+    approved symbol is only looked up in that gene's own record (MAG is not ERCC2). Names that point to several
+    panel genes are left out."""
     if not HGNC.exists():
         return {}
     t = pd.read_csv(HGNC, sep="\t", usecols=["symbol", "prev_symbol", "alias_symbol"], dtype=str).fillna("")
-    vi = set(vocab)
+    t = t[["symbol", "prev_symbol", "alias_symbol"]]                    # usecols keeps file order: alias before prev
+    vi, approved = set(vocab), set(t["symbol"])
     tiers = ({}, {}, {})
     for s, prev, alias in t.itertuples(index=False):
-        names = [s] + [x for x in (prev + "|" + alias).split("|") if x]
-        hit = [n for n in names if n in vi]
+        prev, alias = [x for x in prev.split("|") if x], [x for x in alias.split("|") if x]
+        hit = {n for n in [s] + prev + alias if n in vi and (n == s or n not in approved)}
         if not hit:
             continue
-        for tier, group in zip(tiers, ([s], prev.split("|"), alias.split("|"))):
+        for tier, group in zip(tiers, ([s], prev, [a for a in alias if a not in prev])):
             for n in group:
-                if n:
+                if n == s or n not in approved:
                     tier.setdefault(n, set()).update(hit)
     out = {}
-    for tier in tiers:
+    for kind, tier in zip(("approved", "previous", "alias"), tiers):
         for n, hit in tier.items():
             if n not in out and n not in vi:
-                out[n] = next(iter(hit)) if len(hit) == 1 else None
+                out[n] = (next(iter(hit)), kind) if len(hit) == 1 else None
     return {n: s for n, s in out.items() if s is not None}
 
 
@@ -85,6 +91,9 @@ class TargetLabels:
         parts = [p for p in SEP.split(s) if p]
         if len(parts) > 1 and sum(self._panel(p)[0] is not None for p in parts) > 1:
             return "", "multi_gene"
+        if s in self.hgnc:
+            name, kind = self.hgnc[s]
+            return name, f"hgnc_{kind}"
         return s, "not_in_panel"
 
     def __call__(self, raw):
@@ -93,9 +102,14 @@ class TargetLabels:
         return self.seen[raw]
 
     def report(self, cells):
-        """cells: raw label -> perturbed cells seen. -> {actions: count of labels, changed: every label not exact}."""
+        """cells: raw label -> perturbed cells seen. -> {actions: count of labels, changed: every label not exact,
+        with the other raw labels that became the same panel gene}."""
         actions = pd.Series([a for _, a in self.seen.values()]).value_counts().to_dict()
+        raws = {}
+        for r, (n, _) in self.seen.items():
+            if n:
+                raws.setdefault(n, []).append(r)
         changed = [dict(raw=r, action=a, name=n, cells=int(cells.get(r, 0)),
-                        hgnc_suggestion=self.hgnc.get(r, "") if a == "not_in_panel" else "")
+                        merged_with=sorted(x for x in raws.get(n, []) if x != r))
                    for r, (n, a) in sorted(self.seen.items()) if a != "exact"]
         return dict(actions={k: int(v) for k, v in actions.items()}, changed=changed)
