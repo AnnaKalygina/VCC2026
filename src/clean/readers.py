@@ -741,13 +741,16 @@ class Kolf:
 class CD4T:
     """Genome-scale CRISPRi in primary CD4+ T cells, 4 donors pooled into one context per condition. Counts: GEO
     GSE314342 per-lane Cell Ranger matrices (one file per lane x donor x condition; the same cells and counts as
-    the authors' S3 h5ad files). Labels: the authors' S3 obs tables (scripts/fetch_cd4t_obs.py). Cells:
-    guide_group == 'targeting single sgRNA' and not low_quality; controls guide_type == 'non-targeting';
-    targets perturbed_gene_name. Batch: donor."""
+    the authors' S3 h5ad files; two Stim8hr lanes truncated on GEO come from the S3 files). Labels: the authors'
+    S3 obs tables (scripts/fetch_cd4t_obs.py). Cells: guide_group == 'targeting single sgRNA' and not low_quality;
+    controls guide_type == 'non-targeting'; targets perturbed_gene_name. Batch: donor."""
     DONORS = ("D1", "D2", "D3", "D4")
     RAW = ROOT / "data/raw/cd4t_marson2025"
     CTRL = "\0ctrl"
     MAX_MISSING = 0.05                                   # largest share of a lane's annotated cells GEO may lack
+    # GEO's matrices of these lanes are truncated on GEO itself (AUDIT N1); their cells come from the authors' S3
+    # h5ad instead (scripts/fetch_cd4t_s3_lanes.py)
+    TRUNCATED_ON_GEO = {("D1", "Stim8hr", "R1L14"), ("D4", "Stim8hr", "R2L09")}
     batch_key = "donor"
 
     def __init__(self, cond, tmp=None):
@@ -766,10 +769,14 @@ class CD4T:
             barcode = o.index.str.split("_").str[0].to_numpy()
             lane = o.lane_id.astype(str).str.replace("CD4i_", "", regex=False).to_numpy()
             for ln in sorted(set(lane)):
-                hit = sorted(self.RAW.glob(f"GSM*_CD4i_{ln}_{d}_{cond}_sample_filtered_feature_bc_matrix.h5"))
-                if len(hit) != 1:
-                    raise SystemExit(f"CD4 T {d} {cond} lane {ln}: {len(hit)} GEO matrices on disk")
-                path, receipts[hit[0].name] = raw_file("cd4t_marson2025", hit[0].name)
+                if (d, cond, ln) in self.TRUNCATED_ON_GEO:
+                    name = f"s3_lanes/CD4i_{ln}_{d}_{cond}.h5"
+                else:
+                    hit = sorted(self.RAW.glob(f"GSM*_CD4i_{ln}_{d}_{cond}_sample_filtered_feature_bc_matrix.h5"))
+                    if len(hit) != 1:
+                        raise SystemExit(f"CD4 T {d} {cond} lane {ln}: {len(hit)} GEO matrices on disk")
+                    name = hit[0].name
+                path, receipts[name] = raw_file("cd4t_marson2025", name)
                 m = lane == ln
                 self.files.append((d, path))
                 self.meta.append((barcode[m], lab[m]))
