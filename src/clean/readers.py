@@ -73,7 +73,8 @@ def obs_strings(h, key):
 
 
 def check_counts(X, where):
-    """Refuse non-integer matrices: everything downstream assumes raw UMI counts."""
+    """Refuse non-integer matrices: everything downstream assumes raw UMI counts. run.py calls it on every chunk
+    and run_gene_major on every gene block."""
     d = X.data[:2_000_000]
     bad = int((d != np.round(d)).sum())
     if bad or (d < 0).any():
@@ -111,7 +112,6 @@ class H1:
             lab, bat = cat(f, "obs/target_gene"), cat(f, "obs/batch")
             for lo in range(0, len(lab), CHUNK):
                 X = x_rows(f, lo, min(lo + CHUNK, len(lab)))
-                check_counts(X, "H1")
                 k = np.flatnonzero(lab[lo:lo + CHUNK] == self.CTRL)
                 yield X[k], bat[lo:lo + CHUNK][k]
 
@@ -237,6 +237,7 @@ def run_gene_major(blocks, eng, L, grp, is_ctrl, qc, log, min_umi, batch_labels=
     first = True
     for k, (cols, X) in enumerate(blocks):
         X = X.tocsr()
+        check_counts(X, f"gene block {k}")
         eng.set_controls(X[crow], L[crow], cols, batch=None if bat is None else bat[crow])
         eng.reset_ranks()
         eng.add(X[prow], L[prow], grp[prow], cols, count_cells=first, batch=None if bat is None else bat[prow])
@@ -616,7 +617,6 @@ class ReplogleRows:
         for lo in range(0, self.n, CHUNK):
             hi = min(lo + CHUNK, self.n)
             X = x_rows(h, lo, hi)
-            check_counts(X, str(self.path))
             yield X, self.lab[lo:hi], self.bat[lo:hi]
         h.close()
 
@@ -766,9 +766,7 @@ class CD4T:
             if (pos < 0).any():
                 raise SystemExit(f"{path}: {int((pos < 0).sum())} annotated cells missing from the GEO matrix")
             k = np.flatnonzero(lab == self.CTRL) if want_ctrl else np.flatnonzero((lab != "") & (lab != self.CTRL))
-            Xk = X[pos[k]][:, cols].astype(np.float64)
-            check_counts(Xk, str(path))
-            yield Xk, lab[k], np.full(len(k), donor)
+            yield X[pos[k]][:, cols].astype(np.float64), lab[k], np.full(len(k), donor)
 
     def controls(self):
         for X, _, bat in self._iter(True):

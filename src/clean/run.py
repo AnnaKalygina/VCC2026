@@ -83,6 +83,7 @@ def main():
         for k, (X, bat) in enumerate(src.controls()):
             if k % 5 == 0:
                 log(f"  pass 1: chunk {k}, {qc['ctrl_seen']:,} controls so far")
+            check_counts(X, f"{a.context} controls chunk {k}")
             Xm = gm.apply(X)
             L = np.asarray(Xm.sum(1)).ravel()
             ok = L >= min_umi
