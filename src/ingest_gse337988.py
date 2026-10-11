@@ -27,7 +27,14 @@ def cell_table(min_cells, max_rows=0):
         keep &= np.arange(n_all) < max_rows
     print(f"cells: {n_all:,} in the Low object; hashtag singlets {hs.sum():,}; + guide singlet (v2) {gs.sum():,}; "
           f"+ second caller agrees {cons.sum():,}; - NTC_MENG {int((cons & meng).sum()):,} -> {keep.sum():,}")
-    lab = np.where(d.assignment_v2 == "NTC", CTRL, d.assignment_v2 + "_" + d.promoter)
+    # labels come from assignment_v2 + promoter, the second-caller check above from guide_name: they must agree
+    ntc = d.assignment_v2 == "NTC"
+    prefix = np.where(ntc, "NTC", d.assignment_v2 + "_" + d.promoter + "_")
+    agree = np.array([g.startswith(p) for g, p in zip(d.guide_name, prefix)])
+    bad = keep.to_numpy() & ~agree
+    if bad.any():
+        raise ValueError(f"{int(bad.sum())} kept cells: guide_name disagrees with assignment_v2/promoter")
+    lab = np.where(ntc, CTRL, d.assignment_v2 + "_" + d.promoter)
     gene_of = dict(zip(lab, d.assignment_v2))
     rows = np.flatnonzero(keep.to_numpy())
     lab = lab[rows]
@@ -57,6 +64,7 @@ def _read_block(lo):
         hi = min(lo + BLOCK, X.shape[0])
         loc = np.flatnonzero(_KEEP[lo:hi])
         b = X[lo:hi][loc]
+        assert X.shape[1] <= 65536, "column indices are stored as uint16"
     r, c = np.nonzero(b)
     v = b[r, c]
     vmax = int(v.max()) if len(v) else 0
