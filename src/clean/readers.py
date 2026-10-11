@@ -510,7 +510,8 @@ class HESC:
 # ----------------------------------------------------------------------------------- VIPerturb K562
 class VIPerturb:
     """Zenodo 18460279 genome_wide_bin{A,B,C}.RDS -> scripts/viperturb_extract.R triplets (one bin on disk at a
-    time). All three bins carry the SAME non-targeting cells, so controls come from bin A only."""
+    time). All three bins carry the SAME non-targeting cells (the manifest lists 7,949 in each; cells() checks the
+    barcodes bin by bin), so controls come from bin A only."""
     batch_key = None
     ZEN = "https://zenodo.org/api/records/18460279"
 
@@ -547,6 +548,11 @@ class VIPerturb:
         meta = pd.read_csv(d / "meta.csv", low_memory=False)
         meta["cell"] = meta["cell"].astype(str)
         lab = self.m.labels(meta.set_index("cell").loc[cells]).astype(str)
+        ctrl_cells = set(cells[lab == self.m.CTRL])
+        if want_ctrl:
+            self.ctrl_cells = ctrl_cells
+        elif ctrl_cells != self.ctrl_cells:
+            raise SystemExit(f"bin {b}: its non-targeting cells differ from bin A's; controls must pool all bins")
         sel = (lab == self.m.CTRL) if want_ctrl else (lab != self.m.CTRL)
         for lo in range(0, N, CHUNK):
             hi = min(lo + CHUNK, N)
