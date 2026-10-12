@@ -836,7 +836,7 @@ class Jiang:
     scripts/viperturb_extract.R into data/raw/jiang2025/extract/<PATHWAY> and kept for the other lines."""
     batch_key = "meta.data Batch_info (replicate)"
     ZEN = "https://zenodo.org/api/records/14518762"
-    PATHWAYS = ("IFNB", "IFNG", "INS", "TGFB", "TNFA")
+    PATHWAYS = {"IFNB": "IFNB", "IFNG": "IFNG", "INS": "INS", "TGFB": "TGFB1", "TNFA": "TNFA"}   # file name: obs label
     LINES = ("A549", "BXPC3", "HAP1", "HT29", "K562", "MCF7")
     CTRL = "non-targeting"
 
@@ -849,10 +849,11 @@ class Jiang:
         cells = np.array(open(self.d / "cells.txt").read().splitlines())
         meta = pd.read_csv(self.d / "meta.csv", dtype=str, usecols=["cell", "sample", "pathway", "Batch_info", "gene"])
         meta = meta.set_index("cell").loc[cells]
-        if (meta["pathway"] != pathway).any():
-            raise SystemExit(f"{pathway}: cells of another pathway in the object")
+        label = self.PATHWAYS[pathway]
+        if (meta["pathway"] != label).any():
+            raise SystemExit(f"{pathway}: cells of a pathway other than {label} in the object")
         sample = meta["sample"].to_numpy()
-        self.keep = sample == f"{line}_{pathway}"
+        self.keep = sample == f"{line}_{label}"
         gene = meta["gene"].to_numpy()
         if pd.isna(gene[self.keep]).any() or (gene == self.CTRL).any():
             raise SystemExit(f"{pathway} {line}: missing gene labels, or a target literally named {self.CTRL!r}")
