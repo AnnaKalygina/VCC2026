@@ -22,6 +22,6 @@ contexts:
   replogle_nadig__jurkat: {reader: replogle_rows, args: {source: nadig2025, name: GSE264667_jurkat_raw_singlecell_01.h5ad}, mem_mb: 16000, runtime: 240, cpus: 4}
   replogle_nadig__hepg2:  {reader: replogle_rows, args: {source: nadig2025, name: GSE264667_hepg2_raw_singlecell_01.h5ad}, mem_mb: 16000, runtime: 240, cpus: 4}
   kolf__hiPSC:            {reader: kolf, mem_mb: 48000, runtime: 1440, cpus: 4}
-  cd4t_marson2025__Rest:     {reader: cd4t, args: {cond: Rest}, mem_mb: 64000, runtime: 2880, cpus: 4}
-  cd4t_marson2025__Stim8hr:  {reader: cd4t, args: {cond: Stim8hr}, mem_mb: 64000, runtime: 2880, cpus: 4}
-  cd4t_marson2025__Stim48hr: {reader: cd4t, args: {cond: Stim48hr}, mem_mb: 64000, runtime: 2880, cpus: 4}
+  cd4t_marson2025__Rest:     {reader: cd4t, args: {cond: Rest}, mem_mb: 128000, runtime: 2880, cpus: 4}
+  cd4t_marson2025__Stim8hr:  {reader: cd4t, args: {cond: Stim8hr}, mem_mb: 128000, runtime: 2880, cpus: 4}
+  cd4t_marson2025__Stim48hr: {reader: cd4t, args: {cond: Stim48hr}, mem_mb: 128000, runtime: 2880, cpus: 4}
