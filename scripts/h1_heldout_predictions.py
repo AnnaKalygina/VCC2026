@@ -5,7 +5,8 @@
 Each target's H1 cells are split at random into halves A and B (seeded). Writes to <out>/seed<seed>/:
 
   half_oracle.npz    each target's log2 fold change measured on its half-A cells against half of the control cells
-                     (log2 of mean CPM over mean CPM, eps 1e-9): a strong model with real sampling noise
+                     (log2 of mean CPM over mean CPM, eps 1e-9; 0 for genes with no counts in that control
+                     half): a strong model with real sampling noise
   mean_response.npz  the mean of those fold changes over all 300 targets, the same row for every target: what the
                      scorer's baseline predicts
   holdout.npz        per target, the half-A rows of its source file; `evaluate_h1.py --holdout` never samples them as
@@ -48,7 +49,8 @@ def main():
             rows = np.flatnonzero(lab == t)
             half = np.sort(rng.permutation(rows)[: len(rows) // 2])
             targets.append(t)
-            lfc.append(np.log2((mean_cpm(s.X[half]) + EPS) / (c_mean + EPS)))
+            # A gene absent from the control half has no measurable change; its ratio to eps would be about 2^32.
+            lfc.append(np.where(c_mean > 0, np.log2((mean_cpm(s.X[half]) + EPS) / (c_mean + EPS)), 0))
             hold[t] = half
     order = np.argsort(targets)
     targets, lfc = np.array(targets)[order], np.array(lfc, np.float32)[order]
