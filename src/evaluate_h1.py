@@ -98,6 +98,8 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--bulk-gain', type=float, default=.25,
                     help='share of the LFC realized in the pooled pseudobulk (pds, mse); 1 realizes all of it')
+    ap.add_argument('--reference', help='one h5ad used as the real reference and control source instead of the three '
+                                        'H1 files (e.g. scripts/h1_reference_20k.py output, 20k UMI)')
     ap.add_argument('--holdout', help='npz of target -> source-file rows never sampled as the reference (the cells a '
                                       'held-out prediction was built from; scripts/h1_heldout_predictions.py)')
     args = ap.parse_args()
@@ -105,9 +107,12 @@ def main():
         ap.error('H1 evaluation must run inside Slurm')
     if args.seed < 0:
         ap.error('Require seed >= 0')
+    if args.reference and args.holdout:
+        ap.error('--holdout rows refer to the three H1 files; build the --reference without those cells instead')
     pred_path, out = Path(args.predictions).resolve(), Path(args.out).resolve()
     validate_h1()
-    real_paths = [ROOT / f'data/vcc2025/adata_{s}.h5ad' for s in ('Training', 'Validation', 'Test')]
+    real_paths = ([Path(args.reference).resolve()] if args.reference else
+                  [ROOT / f'data/vcc2025/adata_{s}.h5ad' for s in ('Training', 'Validation', 'Test')])
     sources = [ad.read_h5ad(path, backed='r') for path in real_paths]
     try:
         genes = sources[0].var_names.to_numpy().astype(str)
