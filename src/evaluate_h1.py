@@ -27,7 +27,7 @@ from score import ANCHORS_2026, SCORED, scale
 CTRL, PERT_COL = 'non-targeting', 'target'
 
 
-def load_predictions(path, genes, targets):
+def load_predictions(path, genes, targets, bulk_gain):
     with np.load(path, allow_pickle=False) as z:
         if not {'genes', 'perts', 'lfc', 'source'} <= set(z.files):
             raise ValueError('Prediction requires genes, perts, lfc, and source')
@@ -45,12 +45,12 @@ def load_predictions(path, genes, targets):
             if value.shape != (300, len(genes)) or not np.isfinite(value).all():
                 raise ValueError(f'{name}: expected finite [300, {len(genes)}] matrix')
             value = value[order].astype(np.float64)
-            # Keep the existing bulk-channel gain without bounding either LFC channel.
+            # The bulk-channel gain applies to a given lfc_bulk too; neither LFC channel is bounded.
             if name == 'lfc_bulk':
-                value *= .25
+                value *= bulk_gain
             matrices[name] = value
         if 'lfc_bulk' not in matrices:
-            matrices['lfc_bulk'] = .25 * matrices['lfc']
+            matrices['lfc_bulk'] = bulk_gain * matrices['lfc']
         if z['source'].ndim != 0:
             raise ValueError('source must be a scalar string')
         return matrices, dict(source=str(z['source']))
@@ -96,7 +96,8 @@ def main():
     ap.add_argument('--predictions', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--seed', type=int, default=0)
-    
+    ap.add_argument('--bulk-gain', type=float, default=.25,
+                    help='share of the LFC realized in the pooled pseudobulk (pds, mse); 1 realizes all of it')
     args = ap.parse_args()
     if not os.environ.get('SLURM_JOB_ID'):
         ap.error('H1 evaluation must run inside Slurm')
@@ -114,7 +115,7 @@ def main():
             for target in sorted(set(labels) - {CTRL}):
                 where[target] = (index, np.flatnonzero(labels == target))
         targets = sorted(where)
-        matrices, pred_info = load_predictions(pred_path, genes, targets)
+        matrices, pred_info = load_predictions(pred_path, genes, targets, args.bulk_gain)
         cfg = EvalConfig.from_preset('vcc2026')
         cfg.de = replace(cfg.de, backend='pdex', clip_value=None)
         cfg.device = 'cpu'
@@ -124,7 +125,7 @@ def main():
         code = [Path(__file__), ROOT / 'src/encoder.py', ROOT / 'src/score.py']
         metadata = dict(predictions_sha256=digest(pred_path), seed=args.seed, count_protocol='original_umi_v1',
                         n_perts=300, n_cells=400, block_size=25, cell_weight_scale=1,
-                        bulk_gain=.25, prediction=pred_info, preset=repr(cfg),
+                        bulk_gain=args.bulk_gain, prediction=pred_info, preset=repr(cfg),
                         code_sha256={p.name:digest(p) for p in code},
                         reference=[dict(path=p.name, bytes=p.stat().st_size, mtime_ns=p.stat().st_mtime_ns)
                                    for p in real_paths], cell_eval2_revision='5e64833518a6603a0301cbe28185d49c30f4a986')
