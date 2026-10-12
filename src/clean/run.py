@@ -168,7 +168,9 @@ def main():
                median_batch_shift_rms=float(np.nanmedian(res["batch_shift_rms"]))
                if np.isfinite(res.get("batch_shift_rms", np.zeros(0))).any() else None,
                median_frac_no_ctrl=float(np.nanmedian(res["frac_no_ctrl"])) if "frac_no_ctrl" in res else None,
-               median_reliability_sb=float(np.nanmedian(res["reliability_sb"])) if np.isfinite(res["reliability_sb"]).any() else None)
+               median_reliability_sb=float(np.nanmedian(res["reliability_sb"])) if np.isfinite(res["reliability_sb"]).any() else None,
+               median_reliability_sb_batchmatched=float(np.nanmedian(res["reliability_sb_batchmatched"]))
+               if np.isfinite(res.get("reliability_sb_batchmatched", np.zeros(0))).any() else None)
     assert abs(chk["ctrl_cpm_sum"] - 1e6) < 1e6 * 1e-4, chk
     assert chk["n_lfc_nonfinite"] == 0 and chk["n_nlog10p_nonfinite"] == 0, chk
     log(f"checks: {chk}")
@@ -184,6 +186,8 @@ def main():
                  lfc_batchmatched="log2((pert+1e-9)/(ctrl_ref+1e-9)), ctrl_ref = per-batch control mean CPM weighted "
                                   "by the target's cells per batch; batches with < 20 controls excluded; "
                                   "MWU p stays against the pooled controls",
+                 reliability_batchmatched="as reliability, each half against the control halves mixed by that "
+                                          "half's own cells per batch; half_delta_bm_A/B are its split 0 vectors",
                  seed=a.seed, source=json.dumps(src.provenance))
     tmp = out / f"{a.context}.h5.tmp"
     write_h5(tmp, res, vocab, gm.measured_idx, utg, attrs)

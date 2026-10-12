@@ -16,6 +16,10 @@ against a per-gene SORTED control reference (so the controls must be loaded firs
   reliability = 8 random half-splits; delta_h = mean log1p(CP10k)[pert half h] - mean[ctrl half h];
               Pearson(delta_A, delta_B) over measured genes minus the target; mean r -> Spearman-Brown
               (the src/percell_splithalf.py recipe); split 0's two half deltas are kept as vectors
+  reliability_*_batchmatched, half_delta_bm_A/B = the same with each half's control reference mixed
+              from the control halves of each batch, weighted by that half's own cells per batch (batches
+              with fewer than MIN_CTRL_BATCH / 2 controls in the half get weight 0): a target whose cells
+              come from another batch mix than the controls no longer replicates that mix as an effect
   se_cpm    = standard error of mean_cpm from the per-cell CPM variance, sqrt(var / n)
   lfc_batchmatched = log2((mean_pert + 1e-9) / (ctrl_ref + 1e-9)), ctrl_ref = mean over batches of the
               per-batch control mean CPM, weighted by the target's own cells per batch; batches with
@@ -132,7 +136,7 @@ def _control_pass(indptr, indices, data, L, half, b, bat, n_batches):
     S = half.shape[0]
     s_frac, s_frac2, s_c2, s_Lc = np.zeros(b), np.zeros(b), np.zeros(b), np.zeros(b)
     bsum = np.zeros((n_batches, b))
-    hsum = np.zeros((S, 2, b))
+    hsum = np.zeros((S, 2, n_batches, b))
     cnt = np.zeros(b + 1, np.int64)
     for k in range(indices.size):
         cnt[indices[k] + 1] += 1
@@ -154,7 +158,7 @@ def _control_pass(indptr, indices, data, L, half, b, bat, n_batches):
             for s in range(S):
                 h = half[s, i]
                 if h >= 0:
-                    hsum[s, h, j] += lg
+                    hsum[s, h, bat[i], j] += lg
             val[fill[j]] = c / Li * 1e6
             fill[j] += 1
     return s_frac, s_frac2, s_c2, s_Lc, bsum, hsum, ptr, val
@@ -225,6 +229,9 @@ class Engine:
         by_batch = batches is not None and B <= MAX_BATCH_SUMS
         self.s_fracB = np.zeros((T, B + 1, G) if by_batch else (1, 0, 1), np.float32)
         self.c_bsum, self.c_nb = np.zeros((B, G)), None
+        if batches is not None:
+            self.c_hsumB = np.zeros((S, 2, B, G))                  # control half sums of log1p CP10k per batch
+            self.n_tbA = np.zeros((T, S, B + 1), np.int32)         # perturbed half-A cells per batch
         self.c_se = np.full(G, np.nan)
         self.s_frac, self.s_frac2, self.s_c2, self.s_Lc, self.s_u = (np.zeros((T, G)) for _ in range(5))
         self.s_log = np.zeros((T, G), np.float32)
@@ -261,6 +268,8 @@ class Engine:
             self.c_half = np.full((self.S, n_c), -1, np.int8)      # 0 = half A, 1 = half B, -1 = odd cell out
             for s, (a, bb) in enumerate(self.c_idx):
                 self.c_half[s, a], self.c_half[s, bb] = 0, 1
+            self.c_hnB = np.stack([[np.bincount(self.c_bat[self.c_half[s] == h], minlength=self.B) for h in (0, 1)]
+                                   for s in range(self.S)])
         assert n_c == self.n_c, "control pool changed between gene blocks"
         L = self.c_L
         sl = np.arange(b, dtype=np.int64) if cols is None else np.asarray(cols, np.int64)
@@ -273,8 +282,10 @@ class Engine:
         self.c_bsum[:, sl] = bsum
         self.c_disp[sl] = nb_mom(s_frac, s_c2, s_Lc, n_c, L.sum(), (L ** 2).sum())
         h = n_c // 2
-        self.c_halfA[:, sl] = hsum[:, 0] / h
-        self.c_halfB[:, sl] = hsum[:, 1] / h
+        self.c_halfA[:, sl] = hsum[:, 0].sum(1) / h
+        self.c_halfB[:, sl] = hsum[:, 1].sum(1) / h
+        if self.batches is not None:
+            self.c_hsumB[..., sl] = hsum
         self.ref_ptr, self.ref_val = ptr, val
         self.c_tie[sl] = _sorted_ref(self.ref_ptr, self.ref_val)
         self.ref_zero = (n_c - np.diff(self.ref_ptr)).astype(np.float64)
@@ -309,6 +320,10 @@ class Engine:
                     self.s_tie, self.ref_ptr, self.ref_val, self.ref_zero, self.s_frac2, bat, self.s_fracB)
         if count_cells:
             np.add.at(self.n_tb, (grp, bat), 1)
+            if self.batches is not None:
+                for s in range(self.S):
+                    a = codes[:, s] == 0
+                    np.add.at(self.n_tbA, (grp[a], s, bat[a]), 1)
             self.n += np.bincount(grp, minlength=self.T)
             self.sL += np.bincount(grp, L, minlength=self.T)
             self.sL2 += np.bincount(grp, L ** 2, minlength=self.T)
@@ -367,6 +382,10 @@ class Engine:
             del self.s_fracB
         out["half_delta_A"] = np.full((T, G), np.nan, np.float32)    # split 0, log1p CP10k, all genes
         out["half_delta_B"] = np.full((T, G), np.nan, np.float32)
+        if batched:
+            out["half_delta_bm_A"] = np.full((T, G), np.nan, np.float32)
+            out["half_delta_bm_B"] = np.full((T, G), np.nan, np.float32)
+            r_bm = np.full((T, S), np.nan)
         # reliability
         r = np.full((T, S), np.nan)
         keep = np.ones(G, bool)
@@ -377,6 +396,12 @@ class Engine:
             nA = pairs + (odd & (last_coin == 0))
             nB = self.n - nA
             ok = (nA >= MIN_HALF) & (nB >= MIN_HALF) & (self.n_c // 2 >= MIN_HALF)
+            if batched:
+                okh = self.c_hnB[s] >= MIN_CTRL_BATCH // 2                      # [2, B]
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    cmh = np.where(okh[:, :, None], self.c_hsumB[s] / self.c_hnB[s][:, :, None], 0.0)   # [2, B, G]
+                wA = self.n_tbA[:, s, :self.B] * okh[0]
+                wB = (self.n_tb[:, :self.B] - self.n_tbA[:, s, :self.B]) * okh[1]
             for t in np.flatnonzero(ok):
                 A = self.s_logA[t, s].astype(np.float64)
                 B = self.s_log[t].astype(np.float64) - A
@@ -388,11 +413,25 @@ class Engine:
                 if target_gene_idx[t] >= 0:
                     keep[target_gene_idx[t]] = False
                 r[t, s] = _pearson_rows(dA[keep][None], dB[keep][None])[0]
+                if batched and wA[t].sum() > 0 and wB[t].sum() > 0:
+                    eA = A / nA[t] - wA[t] @ cmh[0] / wA[t].sum()
+                    eB = B / nB[t] - wB[t] @ cmh[1] / wB[t].sum()
+                    if s == 0:
+                        out["half_delta_bm_A"][t], out["half_delta_bm_B"][t] = eA, eB
+                    r_bm[t, s] = _pearson_rows(eA[keep][None], eB[keep][None])[0]
         out["reliability_r"] = r.astype(np.float32)
         cnt = np.isfinite(r).sum(1)
         rm = np.where(cnt > 0, np.nansum(r, 1) / np.maximum(cnt, 1), np.nan)   # NaN = too few cells
         out["reliability_mean"] = rm.astype(np.float32)
         out["reliability_sb"] = np.where(np.isfinite(rm), np.maximum(2 * rm / (1 + rm), 0), np.nan).astype(np.float32)
+        if batched:
+            out["reliability_r_batchmatched"] = r_bm.astype(np.float32)
+            cnt = np.isfinite(r_bm).sum(1)
+            rm = np.where(cnt > 0, np.nansum(r_bm, 1) / np.maximum(cnt, 1), np.nan)
+            out["reliability_mean_batchmatched"] = rm.astype(np.float32)
+            out["reliability_sb_batchmatched"] = np.where(np.isfinite(rm), np.maximum(2 * rm / (1 + rm), 0),
+                                                          np.nan).astype(np.float32)
+            del self.c_hsumB, self.n_tbA
         out["n_cells"] = self.n.astype(np.int64)
         out["depth_mean"] = np.where(self.n > 0, self.sL / np.maximum(self.n, 1), np.nan)
         Ls = np.concatenate(self.L_parts) if self.L_parts else np.zeros(0)
@@ -442,12 +481,13 @@ def write_h5(path, res, vocab, measured_idx, targets, attrs):
             f.create_dataset("batches", data=np.asarray(res["batches"], object), dtype=s)
         f.create_dataset("pert/targets", data=np.asarray(targets, object), dtype=s)
         for k in ("n_cells", "depth_mean", "depth_median", "reliability_mean", "reliability_sb", "reliability_r",
-                  "n_cells_by_batch", "frac_no_ctrl", "batch_shift_rms"):
+                  "n_cells_by_batch", "frac_no_ctrl", "batch_shift_rms", "reliability_mean_batchmatched",
+                  "reliability_sb_batchmatched", "reliability_r_batchmatched"):
             if k in res:
                 f.create_dataset(f"pert/{k}", data=res[k])
         T = len(targets)
         for k in ("mean_cpm", "disp", "lfc", "nlog10p", "se_cpm", "lfc_batchmatched", "half_delta_A", "half_delta_B",
-                  "mean_cpm_by_batch"):
+                  "half_delta_bm_A", "half_delta_bm_B", "mean_cpm_by_batch"):
             if k not in res:
                 continue
             shape = res[k].shape[1:-1] + (V,)

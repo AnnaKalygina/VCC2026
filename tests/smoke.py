@@ -94,6 +94,23 @@ np.testing.assert_allclose(rb['control']['se_cpm'], (ctrl_b / lcb[:, None] * 1e6
 r0 = np.corrcoef(rb['half_delta_A'][0], rb['half_delta_B'][0])[0, 1]
 np.testing.assert_allclose(r0, rb['reliability_r'][0, 0], rtol=1e-4)
 assert 'lfc_batchmatched' not in res and np.isfinite(res['se_cpm']).all()
+# Batch-matched half deltas against brute force: each half against the control halves of each batch, weighted
+# by that half's own cells per batch (AUDIT N8).
+from stats import _half_codes
+rank = np.zeros(40, np.int64)
+for group in (0, 1):
+    rank[groups == group] = np.arange((groups == group).sum())
+codes = _half_codes(groups, rank, 0, 8)
+lg_p, lg_c = np.log1p(pert / lp[:, None] * 1e4), np.log1p(ctrl_b / lcb[:, None] * 1e4)
+for group in (0, 1):
+    for h, key in ((0, 'half_delta_bm_A'), (1, 'half_delta_bm_B')):
+        cells = (groups == group) & (codes[:, 0] == h)
+        ok = np.array([((cb == k) & (eb.c_half[0] == h)).sum() >= MIN_CTRL_BATCH // 2 for k in (0, 1)])
+        w = np.array([(pb[cells] == k).sum() for k in (0, 1)]) * ok
+        cm = np.array([lg_c[(cb == k) & (eb.c_half[0] == h)].mean(0) if ok[k] else np.zeros(24) for k in (0, 1)])
+        np.testing.assert_allclose(rb[key][group], lg_p[cells].mean(0) - w @ cm / w.sum(), atol=1e-5)
+r0 = np.corrcoef(rb['half_delta_bm_A'][0], rb['half_delta_bm_B'][0])[0, 1]
+np.testing.assert_allclose(r0, rb['reliability_r_batchmatched'][0, 0], rtol=1e-4)
 # Gene-major block mode (KOLF, Feng) must equal row mode on the same cells, batches included.
 from readers import run_gene_major
 allx = sp.vstack([sp.csr_matrix(ctrl_b), sp.csr_matrix(pert)]).tocsc()
@@ -104,7 +121,8 @@ labels = np.r_[np.array(['b0', 'b1'])[cb], np.array(['b0', 'b1', 'b2'])[pb]]
 run_gene_major(iter(blocks), eg, np.r_[lcb, lp].astype(float), np.r_[np.full(len(cb), -1), groups], is_c,
                dict(ctrl_seen=0, ctrl_low_umi=0, pert_seen=0, pert_unlabelled=0, pert_low_umi=0), lambda m: None, 1000, labels)
 rg = eg.result(np.array([-1, -1]))
-for k in ('mean_cpm', 'lfc', 'nlog10p', 'se_cpm', 'lfc_batchmatched', 'half_delta_A', 'reliability_r', 'mean_cpm_by_batch'):
+for k in ('mean_cpm', 'lfc', 'nlog10p', 'se_cpm', 'lfc_batchmatched', 'half_delta_A', 'reliability_r', 'mean_cpm_by_batch',
+          'half_delta_bm_A', 'reliability_r_batchmatched'):
     np.testing.assert_allclose(rg[k], rb[k], rtol=1e-5, atol=1e-6, err_msg=k)
 
 # One target-label rule for every reader (AUDIT S10).
