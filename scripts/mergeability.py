@@ -3,7 +3,9 @@ each context has with itself.
 
     pixi run python scripts/mergeability.py [--summaries data] [--out results/mergeability] [--min-shared 20]
 
-Effects are the split-0 half deltas of mean log1p CP10k against the context's own controls (pert/half_delta_A/B),
+Effects are the split-0 half deltas of mean log1p CP10k against the context's own controls: the batch-matched ones
+(pert/half_delta_bm_A/B, each half against controls mixed by its own cells per batch, AUDIT N8) where the context has
+batches, else the pooled ones (pert/half_delta_A/B); the column `effects` in pairs.csv says which,
 so within- and cross-context agreement use one statistic and one gene set: per pair, the genes measured in both
 and above 5 mean CPM in both control pools, minus the target's own gene. Per pair and shared target:
 
@@ -41,6 +43,7 @@ def _s(a):
 def load(path, targets):
     """Rows of the requested targets (in that order) and the context-level vectors."""
     with h5py.File(path) as h:
+        bm = "_bm" if "pert/half_delta_bm_A" in h else ""
         all_t = _s(h["pert/targets"][:])
         pos = pd.Series(np.arange(len(all_t)), index=all_t)[targets].to_numpy()
         order = np.argsort(pos)
@@ -48,7 +51,8 @@ def load(path, targets):
         rows = pos[order]
         get = lambda k: h[k][rows][back].astype(np.float64)     # h5py fancy index wants increasing rows
         return dict(genes=_s(h["genes"][:]), measured=h["measured"][:].astype(bool),
-                    gated=h["control/mean_cpm"][:] > GATE, dA=get("pert/half_delta_A"), dB=get("pert/half_delta_B"),
+                    gated=h["control/mean_cpm"][:] > GATE, dA=get(f"pert/half_delta{bm}_A"), dB=get(f"pert/half_delta{bm}_B"),
+                    effects="batch-matched" if bm else "pooled",
                     nlp=get("pert/nlog10p"), lfc_bm=get("pert/lfc_batchmatched") if "pert/lfc_batchmatched" in h
                     else None)
 
@@ -108,7 +112,7 @@ def compare(name_a, name_b, A, B, targets):
             x, y = A["lfc_bm"][i, c][either], B["lfc_bm"][i, c][either]
             ok = np.isfinite(x) & np.isfinite(y)
             rbm = _pearson(x[ok], y[ok]) if ok.sum() >= 10 else np.nan
-        rows.append(dict(a=name_a, b=name_b, target=t, n_genes=len(c), n_sig_min=int(min(sa[i, c].sum(),
+        rows.append(dict(a=name_a, b=name_b, target=t, effects=f"{A['effects']}/{B['effects']}", n_genes=len(c), n_sig_min=int(min(sa[i, c].sum(),
                          sb[i, c].sum())), n_sig_both=int(both.sum()),
                          r=r, r_centered=_pearson(ca[i, m], cb[i, m]), rel_a=ra, rel_b=rb,
                          r_disatt=r / np.sqrt(ra * rb) if ra > 0 and rb > 0 else np.nan,
