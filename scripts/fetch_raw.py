@@ -74,6 +74,7 @@ SOURCES = [
     hgnc,
     lambda: figshare(20029387, ['K562_essential_raw_singlecell_01.h5ad', 'rpe1_raw_singlecell_01.h5ad'], 'replogle2022'),
     lambda: zenodo(7416068, ['FrangiehIzar2021_RNA.h5ad'], 'scperturb'),
+    lambda: zenodo(10044268, ['SunshineHein2023.h5ad'], 'scperturb'),
     lambda: figshare(27989294, ['GenomeWideScreen_FitnessGenes_RNA-UMI-Counts.csv.gz',
                                 'GenomeWideScreen_NonFitnessGenes_RNA-UMI-Counts.csv.gz'], 'feng'),
     lambda: zenodo(18460279, ['genome_wide_binA.RDS', 'genome_wide_binB.RDS', 'genome_wide_binC.RDS'], 'viperturb'),
@@ -91,6 +92,8 @@ SOURCES = [
     # count-identical), plus the guide-capture features, at a tenth of the size (171 GB vs about 1.7 TB).
     # The authors' per-cell guide calls and QC flags come from the S3 obs tables (scripts/fetch_cd4t_obs.py).
     lambda: geo_samples('GSE314342', 'cd4t_marson2025', lambda n: n.endswith('_sample_filtered_feature_bc_matrix.h5')),
+    # Replogle 2020 experiment 6 (K562, 10x 3' v3, guides by direct capture): counts and per-cell guide identities.
+    lambda: geo_samples('GSE146194', 'replogle2020', lambda n: n.startswith('GSM4367984_')),
 ]
 
 
