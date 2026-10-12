@@ -14,6 +14,7 @@ CSV (lists joined by ';') to <out>/<panel_id>/:
   targets_coverage.csv         one row per panel target, least covered first (cell lines, then contexts, then cells)
   targets_by_context_cells.csv panel target x context matrix of cell counts (0 = not perturbed)
   genes_coverage.csv           one row per panel gene: contexts measuring it, the ones that do not, the A/B/C gates
+  genes_by_context_measured.csv panel gene x context, 1 = the context measures the gene, with the gates and probe flag
   targets_by_context.csv       long form: cells, reliability, depth, own-gene lfc and knockdown, labels renamed to it
   genes_missing.csv            context x panel gene it does not measure, with the gates and the Flex probe flag
   batch_coverage.csv           context x batch: controls, perturbed cells, targets
@@ -170,7 +171,11 @@ def main():
             mean_reliability=_nanstat(np.nanmean, c.get("reliability_sb", [])),
             cell_line=m["cell_line"], cell_type=m["cell_type"], condition=m["condition"], license=m["license"],
             n_controls=c["n_ctrl"], n_genes_measured=int(c["measured"].sum()), n_panel_genes_missing=len(miss),
+            pct_panel_genes_measured=round(100 * c["measured"].mean(), 1),
+            n_native_genes=js.get("genes", {}).get("n_native"),
+            **{f"n_genes_matched_{k}": js.get("genes", {}).get(k) for k in ("exact", "ensembl", "case", "hgnc")},
             n_missing_genes_above_gate_ABC=int(gated.reindex(miss).any(axis=1).sum()),
+            **{f"n_missing_genes_above_gate_{k.split('_')[-1]}": int(gated[k].reindex(miss).sum()) for k in gate_cols},
             n_missing_genes_without_included_probe=int(noprobe.reindex(miss).sum()),
             mean_reliability_batchmatched=_nanstat(np.nanmean, c.get("reliability_sb_batchmatched", [])),
             median_knockdown_fraction=_nanstat(np.nanmedian, 1 - 2 ** own) if len(own) else np.nan,
@@ -227,6 +232,10 @@ def main():
     gc["gated_in_any"] = gated.any(axis=1)
     gc = gc.sort_values(["n_contexts_measured", "gated_in_any"], ascending=[True, False], kind="stable")
     gc.reset_index().to_csv(out / "genes_coverage.csv", index=False, lineterminator="\n")
+    wide = gated.join(noprobe.rename("no_included_probe")).assign(n_contexts_measured=measured.sum(axis=1))
+    wide = wide.join(measured[order].astype(int)).loc[gc.index]
+    wide.rename_axis("gene").reset_index().to_csv(out / "genes_by_context_measured.csv", index=False,
+                                                  lineterminator="\n")
 
     if a.compare:
         old = pd.read_csv(Path(a.compare) / "targets_coverage.csv")
