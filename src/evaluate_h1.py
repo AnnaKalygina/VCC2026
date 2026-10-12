@@ -27,7 +27,7 @@ from score import ANCHORS_2026, SCORED, scale
 CTRL, PERT_COL = 'non-targeting', 'target'
 
 
-def load_predictions(path, genes, targets, bulk_gain):
+def load_predictions(path, genes, targets, bulk_gain=.25):
     with np.load(path, allow_pickle=False) as z:
         if not {'genes', 'perts', 'lfc', 'source'} <= set(z.files):
             raise ValueError('Prediction requires genes, perts, lfc, and source')
