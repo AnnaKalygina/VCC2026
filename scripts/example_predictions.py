@@ -1,4 +1,5 @@
-"""Zero-LFC example using only H1 gene names and target labels."""
+"""Zero-LFC example using only H1 gene names and target labels, or with --oracle-from a summary of the H1 cells
+themselves (data/vcc2025__H1.h5): its measured LFCs, an in-sample upper bound, never a submission."""
 import argparse
 from pathlib import Path
 import sys
@@ -12,6 +13,7 @@ from prepare_data import validate_h1
 
 ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument('--out', default='results/example_predictions.npz')
+ap.add_argument('--oracle-from', help='summary h5 whose pert/lfc becomes the prediction')
 args = ap.parse_args()
 validate_h1()
 targets = set()
@@ -21,6 +23,15 @@ for split in ['Training', 'Validation', 'Test']:
         targets |= set(cat(h, 'obs/target_gene')) - {'non-targeting'}
 out = Path(args.out)
 out.parent.mkdir(parents=True, exist_ok=True)
-np.savez_compressed(out, genes=genes, perts=np.array(sorted(targets)),
-                    lfc=np.zeros((300, len(genes)), np.float32), source='zero-LFC example; no perturbation measurements')
+perts = np.array(sorted(targets))
+lfc, source = np.zeros((300, len(genes)), np.float32), 'zero-LFC example; no perturbation measurements'
+if args.oracle_from:
+    with h5py.File(args.oracle_from) as h:
+        sg = {x.decode(): i for i, x in enumerate(h['genes'][:])}
+        st = {x.decode(): i for i, x in enumerate(h['pert/targets'][:])}
+        rows, cols = [st[t] for t in perts], np.array([sg.get(g, -1) for g in genes])
+        lfc[:, cols >= 0] = np.nan_to_num(h['pert/lfc'][:][rows][:, cols[cols >= 0]])
+    print(f'{(cols < 0).sum()} H1 genes not on the summary axis keep zero LFC: {list(genes[cols < 0])}')
+    source = f'in-sample oracle: measured LFCs of the H1 cells from {Path(args.oracle_from).name}'
+np.savez_compressed(out, genes=genes, perts=perts, lfc=lfc, source=source)
 print(out)
