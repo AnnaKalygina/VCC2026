@@ -898,6 +898,63 @@ class Jiang:
         yield from self._rows(self.keep & (self.lab != self.CTRL))
 
 
+
+# ----------------------------------------------------------------------------------- Replogle 2020 (exp6)
+class Replogle2020:
+    """GEO GSM4367984 (Replogle et al. 2020, experiment 6, K562 CRISPRi, 10x 3' v3, guides by direct capture):
+    MatrixMarket counts + the authors' per-cell guide identities (a dual-guide vector, positions A and B). Controls =
+    cells whose two guides are both non-targeting (`control`); perturbed = `single` cells (one targeting guide plus
+    a non-targeting one), labelled by the targeting guide's Ensembl id as named in features.tsv, so a gene's second
+    guide pair (FDPS_2, HUS1_2) joins the gene. Two-gene cells (`double`) and cells without an identity are dropped."""
+    batch_key = "gem group (barcode suffix)"
+    GEO = "GSM4367984"
+    CTRL = "non-targeting"
+
+    def __init__(self, tmp=None):
+        f = pd.read_csv(raw_file("replogle2020", "GSM4367984_exp6.features.tsv.gz")[0], sep="\t", header=None,
+                        names=["id", "name", "type"])
+        self.is_gex = (f["type"] == "Gene Expression").to_numpy()
+        self.genes, self.ensembl = f["name"][self.is_gex].to_numpy(), f["id"][self.is_gex].to_numpy()
+        name_of = dict(zip(f["id"], f["name"]))
+        bc = pd.read_csv(raw_file("replogle2020", "GSM4367984_exp6.barcodes.tsv.gz")[0], header=None)[0].to_numpy()
+        ids = pd.read_csv(raw_file("replogle2020", "GSM4367984_exp6.cell_identities.csv.gz")[0]).set_index("cell_barcode")
+        ids = ids.reindex(bc)
+        tgt = ids["target_A"].where(ids["target_A"] != "Non-Targeting", ids["target_B"])
+        self.lab = np.full(len(bc), "", dtype=object)
+        single = (ids["single"] == 1).to_numpy()
+        self.lab[single] = tgt[single].map(name_of).to_numpy()
+        if pd.isna(self.lab[single]).any():
+            raise SystemExit("replogle2020: a single-guide target id is not in features.tsv")
+        self.lab[(ids["control"] == 1).to_numpy()] = self.CTRL
+        self.batch = pd.Series(bc).str.split("-").str[1].to_numpy()
+        self.targets = sorted(set(self.lab[single]))
+        self.mtx = raw_file("replogle2020", "GSM4367984_exp6.matrix.mtx.gz")[0]
+        self.provenance = dict(source=f"GEO {self.GEO}", modality="CRISPRi (dCas9-KRAB)", chemistry="10x 3' v3 + direct capture",
+                               n_barcodes=len(bc), n_identified=int(ids["num_guides"].notna().sum()),
+                               n_single=int(single.sum()), n_control=int((self.lab == self.CTRL).sum()),
+                               n_double_dropped=int((ids["double"] == 1).sum()))
+        self.X = None
+
+    def _matrix(self):
+        if self.X is None:                                  # features x barcodes MatrixMarket, ~0.9 GB gzip
+            m = pd.read_csv(self.mtx, sep=" ", comment="%", header=None, dtype=np.int64).to_numpy()
+            (n_f, n_c, nnz), m = m[0], m[1:]
+            assert len(m) == nnz and n_c == len(self.lab)
+            X = sp.csr_matrix((m[:, 2].astype(np.float64), (m[:, 1] - 1, m[:, 0] - 1)), shape=(n_c, n_f))
+            self.X = X[:, np.flatnonzero(self.is_gex)]
+        return self.X
+
+    def controls(self):
+        k = np.flatnonzero(self.lab == self.CTRL)
+        yield self._matrix()[k], self.batch[k]
+
+    def cells(self):
+        k = np.flatnonzero((self.lab != self.CTRL) & (self.lab != ""))
+        for lo in range(0, len(k), CHUNK):
+            kk = k[lo:lo + CHUNK]
+            yield self._matrix()[kk], self.lab[kk], self.batch[kk]
+
+
 READERS = {"h1": H1, "scperturb": ScPerturb, "feng": Feng, "dld1": DLD1, "hesc": HESC, "viperturb": VIPerturb,
            "orion": Orion, "replogle_rows": ReplogleRows, "kolf": Kolf, "cd4t": CD4T,
-           "jiang": Jiang}
+           "jiang": Jiang, "replogle2020": Replogle2020}
