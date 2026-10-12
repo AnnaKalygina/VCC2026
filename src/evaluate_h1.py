@@ -98,6 +98,8 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--bulk-gain', type=float, default=.25,
                     help='share of the LFC realized in the pooled pseudobulk (pds, mse); 1 realizes all of it')
+    ap.add_argument('--holdout', help='npz of target -> source-file rows never sampled as the reference (the cells a '
+                                      'held-out prediction was built from; scripts/h1_heldout_predictions.py)')
     args = ap.parse_args()
     if not os.environ.get('SLURM_JOB_ID'):
         ap.error('H1 evaluation must run inside Slurm')
@@ -125,7 +127,8 @@ def main():
         code = [Path(__file__), ROOT / 'src/encoder.py', ROOT / 'src/score.py']
         metadata = dict(predictions_sha256=digest(pred_path), seed=args.seed, count_protocol='original_umi_v1',
                         n_perts=300, n_cells=400, block_size=25, cell_weight_scale=1,
-                        bulk_gain=args.bulk_gain, prediction=pred_info, preset=repr(cfg),
+                        bulk_gain=args.bulk_gain, holdout_sha256=digest(Path(args.holdout)) if args.holdout else None,
+                        prediction=pred_info, preset=repr(cfg),
                         code_sha256={p.name:digest(p) for p in code},
                         reference=[dict(path=p.name, bytes=p.stat().st_size, mtime_ns=p.stat().st_mtime_ns)
                                    for p in real_paths], cell_eval2_revision='5e64833518a6603a0301cbe28185d49c30f4a986')
@@ -140,8 +143,11 @@ def main():
         _, p_pool, alpha = fit_depth(ctrl, p, libs)
         sampling_rng = np.random.default_rng(args.seed)
         selections = {}
+        hold = np.load(args.holdout) if args.holdout else None
         for target in targets:
             _, rows = where[target]
+            if hold is not None:
+                rows = np.setdiff1d(rows, hold[target])
             if len(rows) < 400:
                 print(f'WARNING {target}: only {len(rows)} reference cells; keeping all', flush=True)
             selections[target] = rows if len(rows) < 400 else np.sort(sampling_rng.choice(rows, 400, replace=False))
