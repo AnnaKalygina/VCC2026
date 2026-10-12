@@ -94,6 +94,8 @@ SOURCES = [
     lambda: geo_samples('GSE314342', 'cd4t_marson2025', lambda n: n.endswith('_sample_filtered_feature_bc_matrix.h5')),
     # Replogle 2020 experiment 6 (K562, 10x 3' v3, guides by direct capture): counts and per-cell guide identities.
     lambda: geo_samples('GSE146194', 'replogle2020', lambda n: n.startswith('GSM4367984_')),
+    # McFaline-Figueroa 2024 sci-Plex-GxE 2 (A172, T98G, U87MG; CRISPRi against 522 kinases; drugs or DMSO).
+    lambda: geo_samples('GSE225775', 'mcfaline2023', lambda n: n.startswith('GSM7056149_')),
 ]
 
 
