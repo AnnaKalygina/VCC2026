@@ -275,8 +275,10 @@ def frangieh_labels(guide_id):
 
 
 class ScPerturb:
-    """Zenodo 7416068 h5ad (md5-pinned by scripts/summarize_scperturb.py). Single-gene perturbations only."""
-    batch_key = None
+    """scPerturb h5ad (Zenodo 7416068, Sunshine from 10044268; md5-pinned by scripts/summarize_scperturb.py).
+    Single-gene perturbations only. Sunshine 2023 (Calu-3, hCRISPRi-v2 guides with direct capture although obs says
+    CRISPR-cas9) is a high-MOI screen: `perturbation` names the genes of all a cell's guides, so perturbed = one gene
+    (any number of its guides), controls = 'control' (only non-targeting guides); batches = gem groups."""
 
     def __init__(self, study, context, tmp):
         sys.path.insert(0, str(ROOT / "scripts"))
@@ -294,9 +296,16 @@ class ScPerturb:
         col = S.find_perturbations(a.obs)
         ctx, cinfo = S.map_contexts(study, a.obs, S.STUDIES[study][2])
         raw = a.obs[col].astype("string")
+        self.batch_key = "obs gem_group" if study == "sunshine" else None
+        self.batch = a.obs["gem_group"].astype(str).to_numpy() if study == "sunshine" else None
         if study == "adamson":
             is_ctrl = raw.str.contains(r"\(", regex=True, na=False).to_numpy()   # parenthesised control constructs
             tg = raw.fillna("").str.split("_").str[0].to_numpy()                   # strip plasmid id
+        elif study == "sunshine":
+            p = raw.fillna("").to_numpy().astype(object)
+            is_ctrl = p == "control"
+            one = (a.obs["nperts"].to_numpy() >= 1) & ~is_ctrl & ~pd.Series(p).str.contains("_").to_numpy()
+            tg = np.where(one, p, "").astype(object)
         else:                                                                     # frangieh
             is_ctrl, tg = frangieh_labels(a.obs["guide_id"].astype(object).to_numpy())
         compound = pd.Series(tg).str.contains(r"[+;,]").to_numpy()
@@ -306,21 +315,24 @@ class ScPerturb:
         self.pert_rows = np.flatnonzero(inctx & ~is_ctrl)
         self.lab = lab
         self.targets = sorted(set(lab[self.pert_rows]) - {""})
-        self.provenance = dict(source=S.RECORD.format(S.STUDIES[study][0]), md5=S.STUDIES[study][1],
+        self.provenance = dict(source=S.RECORDS.get(study, S.RECORD).format(S.STUDIES[study][0]), md5=S.STUDIES[study][1],
                                matrix=self.matrix_field, perturbation_col=col, condition=cinfo,
                                n_compound_dropped=int((inctx & ~is_ctrl & compound).sum()), raw=receipt,
-                               control="parenthesised constructs" if study == "adamson" else
-                               "only NO_SITE / ONE_NON-GENE_SITE guides; perturbed = guides of exactly one gene",
+                               control={"adamson": "parenthesised constructs",
+                                        "sunshine": "perturbation 'control' (only non-targeting guides); perturbed = "
+                                                    "guides of exactly one gene"}.get(
+                                   study, "only NO_SITE / ONE_NON-GENE_SITE guides; perturbed = guides of exactly one gene"),
                                n_unassigned_dropped=int((inctx & ~is_ctrl & (lab == "")).sum()))
 
     def controls(self):
         for lo in range(0, len(self.ctrl_rows), CHUNK):
-            yield self.X[self.ctrl_rows[lo:lo + CHUNK]], None
+            r = self.ctrl_rows[lo:lo + CHUNK]
+            yield self.X[r], None if self.batch is None else self.batch[r]
 
     def cells(self):
         for lo in range(0, len(self.pert_rows), CHUNK):
             r = self.pert_rows[lo:lo + CHUNK]
-            yield self.X[r], self.lab[r], None
+            yield self.X[r], self.lab[r], None if self.batch is None else self.batch[r]
 
 
 # ----------------------------------------------------------------------------------- Feng hPSC
