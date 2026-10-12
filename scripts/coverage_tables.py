@@ -10,7 +10,8 @@ modality, chemistry, lab, source, license) come from workflow/contexts.csv, one 
 workflow/config.yaml. A target counts as covered in a context when the context has cells for it. Writes plain UTF-8
 CSV (lists joined by ';') to <out>/<panel_id>/:
 
-  inventory.csv                one row per context, Michael's atlas inventory columns first
+  inventory.csv                one row per context, Michael's atlas inventory columns first; added_in_audit marks the
+                               contexts that are not in Michael's pipeline (workflow/config.yaml on branch main)
   targets_coverage.csv         one row per panel target, least covered first (cell lines, then contexts, then cells)
   targets_by_context_cells.csv panel target x context matrix of cell counts (0 = not perturbed)
   genes_coverage.csv           one row per panel gene: contexts measuring it, the ones that do not, the A/B/C gates
@@ -24,6 +25,7 @@ CSV (lists joined by ';') to <out>/<panel_id>/:
 """
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import anndata as ad
@@ -36,6 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROBES = ROOT / "data/raw/probeset/Chromium_Human_Transcriptome_Probe_Set_v1.0.1_GRCh38-2020-A.csv"
 CONTEXTS = ROOT / "workflow/contexts.csv"
 GATE_CPM = 5.0                                  # vcc2026 preset: genes tested only above 5 mean CPM in the controls
+BASE = "main"                                   # Michael's pipeline before the audit (mibohl/VCC2026 31d1e88)
 MICHAEL = ["dataset", "context", "source_accession_publication", "lab_group", "perturbation_modality",
            "sequencing_tech", "n_targets", "n_panel_targets", "median_cells_per_target", "median_control_lib_size",
            "mean_reliability"]
@@ -121,6 +124,8 @@ def main():
     if set(files) != set(configured):
         raise SystemExit(f"summaries differ from workflow/config.yaml: missing {sorted(set(configured) - set(files))}, "
                          f"extra {sorted(set(files) - set(configured))}")
+    base = set(yaml.safe_load(subprocess.run(["git", "-C", str(ROOT), "show", f"{BASE}:workflow/config.yaml"],
+                                             check=True, capture_output=True, text=True).stdout)["contexts"])
     unstim = meta["condition"].str.startswith("unstimulated")
     crispri = meta["perturbation_modality"].str.startswith("CRISPRi")
 
@@ -170,6 +175,7 @@ def main():
             median_control_lib_size=c["ctrl_depth_median"],
             mean_reliability=_nanstat(np.nanmean, c.get("reliability_sb", [])),
             cell_line=m["cell_line"], cell_type=m["cell_type"], condition=m["condition"], license=m["license"],
+            added_in_audit=ctx not in base,
             n_controls=c["n_ctrl"], n_genes_measured=int(c["measured"].sum()), n_panel_genes_missing=len(miss),
             pct_panel_genes_measured=round(100 * c["measured"].mean(), 1),
             n_native_genes=js.get("genes", {}).get("n_native"),
