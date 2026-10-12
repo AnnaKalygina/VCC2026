@@ -205,6 +205,24 @@ with tempfile.TemporaryDirectory() as name:
         h['obs/_index'][0] = b'BAD'
     rejects(lambda: validate_h1(tmp))
 
+# Mergeability: two contexts measuring one effect plus independent noise agree up to noise (r_disatt about 1,
+# slope about 1); a context with twice the fold changes gives slope_lfc about 2.
+from mergeability import compare
+rng = np.random.default_rng(5)
+T, G = 30, 400
+E = rng.normal(0, 1, (T, G))
+def ctx(scale):
+    lfc = scale * 0.5 * E + rng.normal(0, 0.05, (T, G))
+    mean = 100 * 2 ** lfc
+    return dict(genes=np.array([f'G{j}' for j in range(G)], object), measured=np.ones(G, bool),
+                gated=np.ones(G, bool), dA=E + rng.normal(0, 1, (T, G)), dB=E + rng.normal(0, 1, (T, G)),
+                effects='pooled', nlp=np.full((T, G), 20.0), lfc_bm=None, lfc=lfc, mean=mean,
+                se=mean * np.log(2) * 0.05, c_mean=np.full(G, 100.0), c_se=np.full(G, 1e-6), depth=1.0)
+res = compare('a', 'b', ctx(1), ctx(2), [f'T{i}' for i in range(T)])
+assert abs(np.median([r['r_disatt'] for r in res]) - 1) < 0.05, np.median([r['r_disatt'] for r in res])
+assert abs(np.median([r['slope'] for r in res]) - 1) < 0.1
+assert abs(np.median([r['slope_lfc'] for r in res]) - 2) < 0.05, np.median([r['slope_lfc'] for r in res])
+
 parts = [GroupMoments(np.array(['T0', 'non-targeting']), np.array([2., 3.]), np.array([4., 5.]), np.array([6., 7.])),
          GroupMoments(np.array(['T1', 'non-targeting']), np.array([8., 3.]), np.array([9., 5.]), np.array([10., 7.]))]
 merged = merge_moments(parts, ['T0', 'T1', 'non-targeting'])
