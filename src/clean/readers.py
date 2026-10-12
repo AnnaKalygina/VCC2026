@@ -826,5 +826,78 @@ class CD4T:
         yield from self._iter(False)
 
 
+
+# ----------------------------------------------------------------------------------- Jiang 2025 (Satija lab)
+class Jiang:
+    """Zenodo 14518762 Seurat_object_<PATHWAY>_Perturb_seq.rds (Jiang et al. 2025): CRISPRi (dCas9-KRAB-MeCP2),
+    Parse Evercode WT Mega, 24 h stimulation with the pathway's cytokine; each object holds six lines. One context =
+    one line x pathway; controls = guide gene 'NT' (14 non-targeting guides). Cells whose sample is 'unknown_unknown'
+    (no line from the fixation well; their cell_type is only inferred) are dropped. Each object is extracted once by
+    scripts/viperturb_extract.R into data/raw/jiang2025/extract/<PATHWAY> and kept for the other lines."""
+    batch_key = "meta.data Batch_info (replicate)"
+    ZEN = "https://zenodo.org/api/records/14518762"
+    PATHWAYS = ("IFNB", "IFNG", "INS", "TGFB", "TNFA")
+    LINES = ("A549", "BXPC3", "HAP1", "HT29", "K562", "MCF7")
+    CTRL = "non-targeting"
+
+    def __init__(self, tmp, pathway, line):
+        if pathway not in self.PATHWAYS or line not in self.LINES:
+            raise SystemExit(f"Jiang: unknown pathway {pathway!r} or line {line!r}")
+        self.d = self._extract(pathway)
+        self.genes = np.array(open(self.d / "genes.txt").read().splitlines())
+        self.ensembl = None
+        cells = np.array(open(self.d / "cells.txt").read().splitlines())
+        meta = pd.read_csv(self.d / "meta.csv", dtype=str, usecols=["cell", "sample", "pathway", "Batch_info", "gene"])
+        meta = meta.set_index("cell").loc[cells]
+        if (meta["pathway"] != pathway).any():
+            raise SystemExit(f"{pathway}: cells of another pathway in the object")
+        sample = meta["sample"].to_numpy()
+        self.keep = sample == f"{line}_{pathway}"
+        gene = meta["gene"].to_numpy()
+        if pd.isna(gene[self.keep]).any() or (gene == self.CTRL).any():
+            raise SystemExit(f"{pathway} {line}: missing gene labels, or a target literally named {self.CTRL!r}")
+        self.lab = np.where(gene == "NT", self.CTRL, gene).astype(object)
+        self.rep = meta["Batch_info"].astype(str).to_numpy()
+        self.targets = sorted(set(self.lab[self.keep]) - {self.CTRL})
+        self.provenance = dict(source=self.ZEN, file=f"Seurat_object_{pathway}_Perturb_seq.rds", pathway=pathway,
+                               line=line, modality="CRISPRi (dCas9-KRAB-MeCP2)", chemistry="Parse Evercode WT Mega",
+                               controls="guide gene NT", n_cells_line=int(self.keep.sum()),
+                               n_unknown_sample_in_object=int((sample == "unknown_unknown").sum()))
+
+    def _extract(self, pathway):
+        import fcntl
+        d = ROOT / "data/raw/jiang2025/extract" / pathway
+        d.parent.mkdir(parents=True, exist_ok=True)
+        with open(d.parent / f"{pathway}.lock", "w") as lock:       # the six line contexts share one extract
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not (d / "info.txt").exists():                     # written last by the extract
+                rds, _ = raw_file("jiang2025", f"Seurat_object_{pathway}_Perturb_seq.rds")
+                subprocess.run(["Rscript", "scripts/viperturb_extract.R", str(rds), str(d)], check=True, cwd=ROOT)
+        return d
+
+    def _rows(self, sel):
+        info = dict(line.split(" ", 1) for line in open(self.d / "info.txt").read().splitlines())
+        G, N = int(info["n_genes"]), int(info["n_cells"])
+        p = np.fromfile(self.d / "p.bin", np.int32).astype(np.int64)
+        i = np.memmap(self.d / "i.bin", np.int32, "r")
+        x = np.memmap(self.d / "x.bin", np.int32, "r")
+        for lo in range(0, N, CHUNK):
+            hi = min(lo + CHUNK, N)
+            k = np.flatnonzero(sel[lo:hi])
+            if not len(k):
+                continue
+            X = sp.csr_matrix((np.asarray(x[p[lo]:p[hi]], np.float64), np.asarray(i[p[lo]:p[hi]]), p[lo:hi + 1] - p[lo]),
+                              shape=(hi - lo, G))[k]
+            yield X, self.lab[lo:hi][k], self.rep[lo:hi][k]
+
+    def controls(self):
+        for X, _, rep in self._rows(self.keep & (self.lab == self.CTRL)):
+            yield X, rep
+
+    def cells(self):
+        yield from self._rows(self.keep & (self.lab != self.CTRL))
+
+
 READERS = {"h1": H1, "scperturb": ScPerturb, "feng": Feng, "dld1": DLD1, "hesc": HESC, "viperturb": VIPerturb,
-           "orion": Orion, "replogle_rows": ReplogleRows, "kolf": Kolf, "cd4t": CD4T}
+           "orion": Orion, "replogle_rows": ReplogleRows, "kolf": Kolf, "cd4t": CD4T,
+           "jiang": Jiang}

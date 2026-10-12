@@ -25,3 +25,33 @@ contexts:
   cd4t_marson2025__Rest:     {reader: cd4t, args: {cond: Rest}, mem_mb: 128000, runtime: 2880, cpus: 4}
   cd4t_marson2025__Stim8hr:  {reader: cd4t, args: {cond: Stim8hr}, mem_mb: 128000, runtime: 2880, cpus: 4}
   cd4t_marson2025__Stim48hr: {reader: cd4t, args: {cond: Stim48hr}, mem_mb: 128000, runtime: 2880, cpus: 4}
+  jiang2025_ifnb__a549:       {reader: jiang, args: {pathway: IFNB, line: A549}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifnb__bxpc3:      {reader: jiang, args: {pathway: IFNB, line: BXPC3}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifnb__hap1:       {reader: jiang, args: {pathway: IFNB, line: HAP1}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifnb__ht29:       {reader: jiang, args: {pathway: IFNB, line: HT29}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifnb__k562:       {reader: jiang, args: {pathway: IFNB, line: K562}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifnb__mcf7:       {reader: jiang, args: {pathway: IFNB, line: MCF7}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifng__a549:       {reader: jiang, args: {pathway: IFNG, line: A549}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifng__bxpc3:      {reader: jiang, args: {pathway: IFNG, line: BXPC3}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifng__hap1:       {reader: jiang, args: {pathway: IFNG, line: HAP1}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifng__ht29:       {reader: jiang, args: {pathway: IFNG, line: HT29}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifng__k562:       {reader: jiang, args: {pathway: IFNG, line: K562}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ifng__mcf7:       {reader: jiang, args: {pathway: IFNG, line: MCF7}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ins__a549:        {reader: jiang, args: {pathway: INS, line: A549}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ins__bxpc3:       {reader: jiang, args: {pathway: INS, line: BXPC3}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ins__hap1:        {reader: jiang, args: {pathway: INS, line: HAP1}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ins__ht29:        {reader: jiang, args: {pathway: INS, line: HT29}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ins__k562:        {reader: jiang, args: {pathway: INS, line: K562}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_ins__mcf7:        {reader: jiang, args: {pathway: INS, line: MCF7}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tgfb__a549:       {reader: jiang, args: {pathway: TGFB, line: A549}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tgfb__bxpc3:      {reader: jiang, args: {pathway: TGFB, line: BXPC3}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tgfb__hap1:       {reader: jiang, args: {pathway: TGFB, line: HAP1}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tgfb__ht29:       {reader: jiang, args: {pathway: TGFB, line: HT29}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tgfb__k562:       {reader: jiang, args: {pathway: TGFB, line: K562}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tgfb__mcf7:       {reader: jiang, args: {pathway: TGFB, line: MCF7}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tnfa__a549:       {reader: jiang, args: {pathway: TNFA, line: A549}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tnfa__bxpc3:      {reader: jiang, args: {pathway: TNFA, line: BXPC3}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tnfa__hap1:       {reader: jiang, args: {pathway: TNFA, line: HAP1}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tnfa__ht29:       {reader: jiang, args: {pathway: TNFA, line: HT29}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tnfa__k562:       {reader: jiang, args: {pathway: TNFA, line: K562}, mem_mb: 32000, runtime: 240, cpus: 4}
+  jiang2025_tnfa__mcf7:       {reader: jiang, args: {pathway: TNFA, line: MCF7}, mem_mb: 32000, runtime: 240, cpus: 4}
