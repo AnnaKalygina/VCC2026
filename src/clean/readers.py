@@ -968,6 +968,68 @@ class Replogle2020:
             yield self._matrix()[kk], self.lab[kk], self.batch[kk]
 
 
+
+# ----------------------------------------------------------------------------------- McFaline-Figueroa 2024 kinome
+class McFaline:
+    """GEO GSM7056149 (McFaline-Figueroa et al. 2024, sci-Plex-GxE, CRISPRi dCas9-KRAB against 522 kinases in
+    A172, T98G and U87MG): the authors' monocle3 objects, extracted per line by scripts/mcfaline_extract.R into
+    data/raw/mcfaline2023/extract/<line> and kept. One context = one line under vehicle (DMSO); the drug arms are left
+    out. Perturbed = cells with one called guide (guide_number 1); controls = their NTC guides. Cells with a `random`
+    guide, several guides or none are dropped. Batches = the authors' replicate."""
+    batch_key = "colData replicate"
+    GEO = "GSM7056149"
+    LINES = ("A172", "T98G", "U87MG")
+    CTRL = "non-targeting"
+
+    def __init__(self, tmp, line):
+        if line not in self.LINES:
+            raise SystemExit(f"McFaline: unknown line {line!r}")
+        self.d = ROOT / "data/raw/mcfaline2023/extract" / line
+        if not (self.d / "info.txt").exists():
+            rds, _ = raw_file("mcfaline2023", "GSM7056149_sciPlexGxE_2_preprocessed_cds.list.RDS.gz")
+            subprocess.run(["Rscript", "scripts/mcfaline_extract.R", str(rds), str(self.d.parent)], check=True, cwd=ROOT)
+        self.genes = np.array(open(self.d / "genes.txt").read().splitlines())
+        self.ensembl = np.array(open(self.d / "ensembl.txt").read().splitlines())
+        m = pd.read_csv(self.d / "meta.csv", dtype=str, usecols=["cell", "treatment", "replicate", "gene_id", "guide_number"])
+        cells = np.array(open(self.d / "cells.txt").read().splitlines())
+        assert (m["cell"].to_numpy() == cells).all()
+        g = m["gene_id"].fillna("").to_numpy().astype(object)
+        if (g == self.CTRL).any():
+            raise SystemExit(f"a target is literally named {self.CTRL!r}")
+        use = (m["treatment"] == "vehicle").to_numpy() & (m["guide_number"] == "1").to_numpy() & (g != "random")
+        self.lab = np.where(use, np.where(g == "NTC", self.CTRL, g), "").astype(object)
+        self.rep = m["replicate"].astype(str).to_numpy()
+        self.targets = sorted(set(self.lab) - {"", self.CTRL})
+        veh = (m["treatment"] == "vehicle").to_numpy()
+        self.provenance = dict(source=f"GEO {self.GEO}", line=line, condition="vehicle (DMSO)",
+                               modality="CRISPRi (dCas9-KRAB)", chemistry="sci-RNA-seq3 (sci-Plex-GxE)",
+                               controls="NTC guides", n_vehicle=int(veh.sum()),
+                               n_random_guide_dropped=int((veh & (g == "random")).sum()),
+                               n_no_or_multi_guide_dropped=int((veh & (m["guide_number"] != "1").to_numpy()).sum()))
+
+    def _rows(self, sel):
+        info = dict(line.split(" ", 1) for line in open(self.d / "info.txt").read().splitlines())
+        G, N = int(info["n_genes"]), int(info["n_cells"])
+        p = np.fromfile(self.d / "p.bin", np.int32).astype(np.int64)
+        i = np.memmap(self.d / "i.bin", np.int32, "r")
+        x = np.memmap(self.d / "x.bin", np.int32, "r")
+        for lo in range(0, N, CHUNK):
+            hi = min(lo + CHUNK, N)
+            k = np.flatnonzero(sel[lo:hi])
+            if not len(k):
+                continue
+            X = sp.csr_matrix((np.asarray(x[p[lo]:p[hi]], np.float64), np.asarray(i[p[lo]:p[hi]]), p[lo:hi + 1] - p[lo]),
+                              shape=(hi - lo, G))[k]
+            yield X, self.lab[lo:hi][k], self.rep[lo:hi][k]
+
+    def controls(self):
+        for X, _, rep in self._rows(self.lab == self.CTRL):
+            yield X, rep
+
+    def cells(self):
+        yield from self._rows((self.lab != self.CTRL) & (self.lab != ""))
+
+
 READERS = {"h1": H1, "scperturb": ScPerturb, "feng": Feng, "dld1": DLD1, "hesc": HESC, "viperturb": VIPerturb,
            "orion": Orion, "replogle_rows": ReplogleRows, "kolf": Kolf, "cd4t": CD4T,
-           "jiang": Jiang, "replogle2020": Replogle2020}
+           "jiang": Jiang, "replogle2020": Replogle2020, "mcfaline": McFaline}

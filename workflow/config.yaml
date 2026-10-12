@@ -57,3 +57,6 @@ contexts:
   jiang2025_tnfa__mcf7:       {reader: jiang, args: {pathway: TNFA, line: MCF7}, mem_mb: 32000, runtime: 240, cpus: 4}
   replogle2020__k562:         {reader: replogle2020, mem_mb: 32000, runtime: 120, cpus: 4}
   sunshine__calu3:            {reader: scperturb, args: {study: sunshine, context: sunshine__calu3}, mem_mb: 32000, runtime: 240, cpus: 4}
+  mcfaline2023__a172:         {reader: mcfaline, args: {line: A172}, mem_mb: 32000, runtime: 240, cpus: 4}
+  mcfaline2023__t98g:         {reader: mcfaline, args: {line: T98G}, mem_mb: 32000, runtime: 240, cpus: 4}
+  mcfaline2023__u87mg:        {reader: mcfaline, args: {line: U87MG}, mem_mb: 32000, runtime: 240, cpus: 4}
