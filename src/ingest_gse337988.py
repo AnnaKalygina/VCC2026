@@ -27,7 +27,6 @@ def cell_table(min_cells, max_rows=0):
         keep &= np.arange(n_all) < max_rows
     print(f"cells: {n_all:,} in the Low object; hashtag singlets {hs.sum():,}; + guide singlet (v2) {gs.sum():,}; "
           f"+ second caller agrees {cons.sum():,}; - NTC_MENG {int((cons & meng).sum()):,} -> {keep.sum():,}")
-    # labels come from assignment_v2 + promoter, the second-caller check above from guide_name: they must agree
     ntc = d.assignment_v2 == "NTC"
     prefix = np.where(ntc, "NTC", d.assignment_v2 + "_" + d.promoter + "_")
     agree = np.array([g.startswith(p) for g, p in zip(d.guide_name, prefix)])

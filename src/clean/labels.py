@@ -1,13 +1,4 @@
-"""Target label -> panel symbol, one rule for every reader.
-
-Order: drop sentinels (`*`, `nan`, empty, ...); exact panel symbol; unique case-insensitive match; underscore
-written for a hyphen (`HLA_B` -> `HLA-B`); the deposit's own gene axis (the label is a native gene symbol that the
-gene map joined to exactly one panel gene, e.g. by Ensembl id); two or more panel genes joined by a separator
-(`HSPE1_MOB4`, shared promoters) are dropped as ambiguous; an HGNC previous or alias symbol that points to exactly
-one panel gene is renamed to it (`ATP5A1` -> `ATP5F1A`). Everything else keeps its label and is reported. Every label
-that is not an exact panel symbol is listed in the report, with the panel gene it became and the other raw labels
-that became the same gene.
-"""
+"""Target label to panel symbol, with one rule for every reader."""
 import re
 from pathlib import Path
 
@@ -21,15 +12,11 @@ SEP = re.compile(r"[_+;,]")
 
 
 def hgnc_suggestions(vocab):
-    """HGNC symbol -> (the one panel gene of the same HGNC record, which kind of name the label is: approved,
-    previous or alias). A panel name counts for a record only if it is that record's approved symbol or no other
-    record's approved symbol (the panel's ATR is the kinase, not SERPINA2's alias), and a label that is some gene's
-    approved symbol is only looked up in that gene's own record (MAG is not ERCC2). Names that point to several
-    panel genes are left out."""
+    """HGNC symbol -> (the one panel gene of its HGNC record, whether the symbol is approved, previous or alias)."""
     if not HGNC.exists():
         return {}
     t = pd.read_csv(HGNC, sep="\t", usecols=["symbol", "prev_symbol", "alias_symbol"], dtype=str).fillna("")
-    t = t[["symbol", "prev_symbol", "alias_symbol"]]                    # usecols keeps file order: alias before prev
+    t = t[["symbol", "prev_symbol", "alias_symbol"]]
     vi, approved = set(vocab), set(t["symbol"])
     tiers = ({}, {}, {})
     for s, prev, alias in t.itertuples(index=False):
@@ -102,8 +89,7 @@ class TargetLabels:
         return self.seen[raw]
 
     def report(self, cells):
-        """cells: raw label -> perturbed cells seen. -> {actions: count of labels, changed: every label not exact,
-        with the other raw labels that became the same panel gene}."""
+        """Count of labels per action, and every changed label with the raw labels that became the same gene."""
         actions = pd.Series([a for _, a in self.seen.values()]).value_counts().to_dict()
         raws = {}
         for r, (n, _) in self.seen.items():

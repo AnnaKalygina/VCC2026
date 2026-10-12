@@ -16,15 +16,9 @@ against a per-gene SORTED control reference (so the controls must be loaded firs
   reliability = 8 random half-splits; delta_h = mean log1p(CP10k)[pert half h] - mean[ctrl half h];
               Pearson(delta_A, delta_B) over measured genes minus the target; mean r -> Spearman-Brown
               (the src/percell_splithalf.py recipe); split 0's two half deltas are kept as vectors
-  reliability_*_batchmatched, half_delta_bm_A/B = the same with each half's control reference mixed
-              from the control halves of each batch, weighted by that half's own cells per batch (batches
-              with fewer than MIN_CTRL_BATCH / 2 controls in the half get weight 0): a target whose cells
-              come from another batch mix than the controls no longer replicates that mix as an effect
-  se_cpm    = standard error of mean_cpm from the per-cell CPM variance, sqrt(var / n)
-  lfc_batchmatched = log2((mean_pert + 1e-9) / (ctrl_ref + 1e-9)), ctrl_ref = mean over batches of the
-              per-batch control mean CPM, weighted by the target's own cells per batch; batches with
-              fewer than MIN_CTRL_BATCH controls get weight 0 (their cells are counted in frac_no_ctrl).
-              Only the reference changes: the MWU test stays against the pooled controls.
+  reliability_*_batchmatched, half_delta_bm_A/B = the same, each half against controls mixed by its cells per batch
+  se_cpm    = standard error of mean_cpm, sqrt(var(CPM) / n)
+  lfc_batchmatched = lfc against controls mixed by the target's cells per batch; the MWU test stays pooled
 
 MWU streaming identity: U1 = sum_{pert cells i} (#ctrl < x_i + 0.5 #ctrl == x_i) exactly, so U1 is a
 sum over perturbed cells. The tie term sum(t^3 - t) is exact for the zero tie and for control/pert
@@ -43,9 +37,9 @@ EPS = 1e-9
 MIN_UMI = 1000
 N_SPLITS = 8
 MIN_HALF = 8          # src/percell_splithalf.py MIN_CELLS_HALF
-MIN_CTRL_BATCH = 20   # controls a batch needs to serve as a batch-matched reference
-MAX_BATCH_SUMS = 10   # per-target per-batch mean CPM is kept only for few batches (donors, pools)
-GATE_CPM = 5.0        # cell-eval2 vcc2026 expression gate on the control mean
+MIN_CTRL_BATCH = 20
+MAX_BATCH_SUMS = 10
+GATE_CPM = 5.0
 LN10 = math.log(10.0)
 
 
@@ -130,9 +124,8 @@ def _sorted_ref(indptr, vals):
 
 @nb.njit
 def _control_pass(indptr, indices, data, L, half, b, bat, n_batches):
-    """CSR control pool -> per-gene sums (also per batch), per-split half sums of log1p(CP10k), and the
-    CSC-ordered CPM values (counting sort; CPM = c / L * 1e6 exactly as in _add_kernel, so ties compare
-    bit-identically)."""
+    """CSR control pool -> per-gene sums (also per batch), per-split half sums of log1p(CP10k), and the CSC-ordered CPM
+    values (counting sort; CPM = c / L * 1e6 exactly as in _add_kernel, so ties compare bit-identically)."""
     S = half.shape[0]
     s_frac, s_frac2, s_c2, s_Lc = np.zeros(b), np.zeros(b), np.zeros(b), np.zeros(b)
     bsum = np.zeros((n_batches, b))
@@ -215,8 +208,7 @@ class Engine:
                 indices, any order, each gene complete within one block): set_controls(.., cols) then
                 add(.., cols, count_cells=(first block)); call reset_ranks() before each block so every
                 block sees the same cell order and hence the same half assignment.
-    Batches: `batches` names the batches that hold controls (codes 0..B-1); perturbed cells from a batch
-                without controls get code B. Without `batches`, no batch-matched output is produced.
+    Batches:    `batches` names the batches with controls (codes 0..B-1); cells of other batches get code B.
     """
 
     def __init__(self, n_genes, n_targets, seed=0, n_splits=N_SPLITS, batches=None):
@@ -225,13 +217,13 @@ class Engine:
         self.batches = None if batches is None else list(batches)
         B = 1 if batches is None else len(self.batches)
         self.B = B
-        self.n_tb = np.zeros((T, B + 1), np.int64)                 # last column: batch without controls
+        self.n_tb = np.zeros((T, B + 1), np.int64)
         by_batch = batches is not None and B <= MAX_BATCH_SUMS
         self.s_fracB = np.zeros((T, B + 1, G) if by_batch else (1, 0, 1), np.float32)
         self.c_bsum, self.c_nb = np.zeros((B, G)), None
         if batches is not None:
-            self.c_hsumB = np.zeros((S, 2, B, G))                  # control half sums of log1p CP10k per batch
-            self.n_tbA = np.zeros((T, S, B + 1), np.int32)         # perturbed half-A cells per batch
+            self.c_hsumB = np.zeros((S, 2, B, G))
+            self.n_tbA = np.zeros((T, S, B + 1), np.int32)
         self.c_se = np.full(G, np.nan)
         self.s_frac, self.s_frac2, self.s_c2, self.s_Lc, self.s_u = (np.zeros((T, G)) for _ in range(5))
         self.s_log = np.zeros((T, G), np.float32)
@@ -252,9 +244,9 @@ class Engine:
         self.n_c = None
 
     def set_controls(self, X, L, cols=None, batch=None):
-        """X: [n_c, b] counts (cells already UMI-filtered), L: [n_c] vocab depth, batch: [n_c] codes
-        0..B-1 (None without batches). One numba pass over the CSR arrays (no scipy copies: control pools
-        reach 1e9 non-zeros) -> control moments, half means and the per-gene sorted CPM reference for the MWU."""
+        """X: [n_c, b] counts (cells already UMI-filtered), L: [n_c] vocab depth, batch: [n_c] codes or None. One numba
+        pass over the CSR arrays (no scipy copies: control pools reach 1e9 non-zeros) -> control moments, half means
+        and the per-gene sorted CPM reference for the MWU."""
         X = sp.csr_matrix(X)
         n_c, b = X.shape
         if self.n_c is None:
@@ -296,8 +288,7 @@ class Engine:
         self.rank[:] = 0
 
     def add(self, X, L, grp, cols=None, count_cells=True, batch=None):
-        """X: [n, b] counts of PERTURBED cells (UMI-filtered), grp: [n] target index 0..T-1,
-        batch: [n] codes 0..B (B = a batch without controls; None without batches)."""
+        """X: [n, b] counts of PERTURBED cells (UMI-filtered), grp: [n] target index, batch: [n] codes or None."""
         if cols is not None:
             assert np.array_equal(cols, self.ref_cols), "add() must use the gene block of the last set_controls()"
         grp = np.asarray(grp, np.int64)
@@ -370,7 +361,7 @@ class Engine:
         empty = self.n == 0
         for k in keys:
             out[k][empty] = np.nan
-        del self.s_frac, self.s_frac2, self.s_c2, self.s_Lc, self.s_u, self.s_tie, self.nnz   # reliability: s_log/s_logA
+        del self.s_frac, self.s_frac2, self.s_c2, self.s_Lc, self.s_u, self.s_tie, self.nnz
         if batched:
             out["n_cells_by_batch"] = self.n_tb
             with np.errstate(divide="ignore", invalid="ignore"):
@@ -380,7 +371,7 @@ class Engine:
                 with np.errstate(divide="ignore", invalid="ignore"):
                     out["mean_cpm_by_batch"] = (self.s_fracB / self.n_tb[:, :, None] * 1e6).astype(np.float32)
             del self.s_fracB
-        out["half_delta_A"] = np.full((T, G), np.nan, np.float32)    # split 0, log1p CP10k, all genes
+        out["half_delta_A"] = np.full((T, G), np.nan, np.float32)
         out["half_delta_B"] = np.full((T, G), np.nan, np.float32)
         if batched:
             out["half_delta_bm_A"] = np.full((T, G), np.nan, np.float32)
@@ -397,9 +388,9 @@ class Engine:
             nB = self.n - nA
             ok = (nA >= MIN_HALF) & (nB >= MIN_HALF) & (self.n_c // 2 >= MIN_HALF)
             if batched:
-                okh = self.c_hnB[s] >= MIN_CTRL_BATCH // 2                      # [2, B]
+                okh = self.c_hnB[s] >= MIN_CTRL_BATCH // 2
                 with np.errstate(divide="ignore", invalid="ignore"):
-                    cmh = np.where(okh[:, :, None], self.c_hsumB[s] / self.c_hnB[s][:, :, None], 0.0)   # [2, B, G]
+                    cmh = np.where(okh[:, :, None], self.c_hsumB[s] / self.c_hnB[s][:, :, None], 0.0)
                 wA = self.n_tbA[:, s, :self.B] * okh[0]
                 wB = (self.n_tb[:, :self.B] - self.n_tbA[:, s, :self.B]) * okh[1]
             for t in np.flatnonzero(ok):

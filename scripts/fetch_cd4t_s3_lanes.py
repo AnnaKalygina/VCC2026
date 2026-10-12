@@ -1,11 +1,4 @@
-"""Recover the two CD4 T Stim8hr lanes whose GEO matrices are truncated on GEO itself (AUDIT N1) from the authors'
-S3 h5ad files, which hold the same cells.
-
-Each lane's cells are one contiguous row range of the S3 CSR matrix; only that range is read by HTTP range requests
-(src/remote_h5.py, about 6 to 7 GB per lane) and written in the Cell Ranger h5 layout the CD4 T reader reads
-(gene-expression features only), to data/raw/cd4t_marson2025/s3_lanes/CD4i_<lane>_<donor>_<cond>.h5, with a receipt
-in data/provenance/.
-"""
+"""Recover the two CD4 T Stim8hr lanes that GEO truncated from the authors' S3 h5ad files."""
 import hashlib
 import json
 import os
@@ -23,8 +16,8 @@ from downloads import digest  # noqa: E402
 
 URL = 'https://genome-scale-tcell-perturb-seq.s3.amazonaws.com/marson2025_data/{}.assigned_guide.h5ad'
 RAW = ROOT / 'data/raw/cd4t_marson2025'
-LANES = [('D1', 'Stim8hr', 'R1L14'), ('D4', 'Stim8hr', 'R2L09')]     # truncated on GEO (AUDIT N1)
-STEP = 5000                                                         # cells per range read
+LANES = [('D1', 'Stim8hr', 'R1L14'), ('D4', 'Stim8hr', 'R2L09')]
+STEP = 5000
 
 
 def fetch(donor, cond, lane):

@@ -45,7 +45,6 @@ def load_predictions(path, genes, targets, bulk_gain=.25):
             if value.shape != (300, len(genes)) or not np.isfinite(value).all():
                 raise ValueError(f'{name}: expected finite [300, {len(genes)}] matrix')
             value = value[order].astype(np.float64)
-            # The bulk-channel gain applies to a given lfc_bulk too; neither LFC channel is bounded.
             if name == 'lfc_bulk':
                 value *= bulk_gain
             matrices[name] = value

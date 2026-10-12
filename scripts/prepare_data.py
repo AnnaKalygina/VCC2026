@@ -107,8 +107,6 @@ def probeset_pairs():
 
 def ensembl():
     from genes import load_vocab
-    # The probe set defines the panel, so its Ensembl ids take precedence; the other sources only add ids
-    # the probe set does not list (e.g. older or newer annotation versions of the same gene).
     canon = probeset_pairs()
     pairs = []
     with h5py.File(ROOT / 'data/vcc2025/adata_Training.h5ad') as h:

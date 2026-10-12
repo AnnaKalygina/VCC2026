@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from downloads import download  # noqa: E402
 
-ORION_REV = '53a5bc98d49247bcf967500292575c3d3602de31'   # X-Atlas-Orion dataset revision, pinned 2026-10-09
+ORION_REV = '53a5bc98d49247bcf967500292575c3d3602de31'
 
 
 def _json(url):
@@ -87,14 +87,8 @@ SOURCES = [
                        'nadig2025'),
     lambda: geo_series('GSE337988', ['GSE337988_sublib2_processed_objects_Low_assays.h5'], 'gse337988'),
     lambda: geo_samples('GSE295214', 'gse295214', lambda n: n.endswith('_filtered_feature_bc_matrix.h5')),
-    # CD4 T (Marson 2025): GEO's per-lane Cell Ranger matrices hold every cell of the authors' S3 h5ad files with
-    # identical counts (checked 2026-10-09 on donor 1 resting, lane R1L01: 137,668 of 137,668 cells, 300 cells
-    # count-identical), plus the guide-capture features, at a tenth of the size (171 GB vs about 1.7 TB).
-    # The authors' per-cell guide calls and QC flags come from the S3 obs tables (scripts/fetch_cd4t_obs.py).
     lambda: geo_samples('GSE314342', 'cd4t_marson2025', lambda n: n.endswith('_sample_filtered_feature_bc_matrix.h5')),
-    # Replogle 2020 experiment 6 (K562, 10x 3' v3, guides by direct capture): counts and per-cell guide identities.
     lambda: geo_samples('GSE146194', 'replogle2020', lambda n: n.startswith('GSM4367984_')),
-    # McFaline-Figueroa 2024 sci-Plex-GxE 2 (A172, T98G, U87MG; CRISPRi against 522 kinases; drugs or DMSO).
     lambda: geo_samples('GSE225775', 'mcfaline2023', lambda n: n.startswith('GSM7056149_')),
 ]
 
@@ -120,7 +114,7 @@ def main():
         for f in cf.as_completed(futures):
             try:
                 print(f'done {f.result()}', flush=True)
-            except Exception as e:                                  # keep going; report at the end
+            except Exception as e:
                 failed.append(futures[f]['name'])
                 print(f'FAILED {futures[f]["name"]}: {e}', flush=True)
     if failed:

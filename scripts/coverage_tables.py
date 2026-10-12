@@ -1,28 +1,4 @@
-"""Coverage of a challenge panel by the summarized contexts: which panel targets each context perturbs, how well, and
-which panel genes it does not measure.
-
-    pixi run python scripts/coverage_tables.py --bundle <controls dir> [--summaries data] [--out results/coverage]
-                                               [--compare <results/coverage/<old panel_id>>]
-
-The panel comes from the bundle (gene_names.csv or the control h5ad var, pert_counts.csv, manifest.json, the control
-h5ads), so the same command runs unchanged on the final D/E/F bundle. Context descriptions (cell line, condition,
-modality, chemistry, lab, source, license) come from workflow/contexts.csv, one row per context in
-workflow/config.yaml. A target counts as covered in a context when the context has cells for it. Writes plain UTF-8
-CSV (lists joined by ';') to <out>/<panel_id>/:
-
-  inventory.csv                one row per context, Michael's atlas inventory columns first; added_in_audit marks the
-                               contexts that are not in Michael's pipeline (workflow/config.yaml on branch main)
-  targets_coverage.csv         one row per panel target, least covered first (cell lines, then contexts, then cells)
-  targets_by_context_cells.csv panel target x context matrix of cell counts (0 = not perturbed)
-  genes_coverage.csv           one row per panel gene: contexts measuring it, the ones that do not, the A/B/C gates
-  genes_by_context_measured.csv panel gene x context, 1 = the context measures the gene, with the gates and probe flag
-  targets_by_context.csv       long form: cells, reliability, depth, own-gene lfc and knockdown, labels renamed to it
-  genes_missing.csv            context x panel gene it does not measure, with the gates and the Flex probe flag
-  batch_coverage.csv           context x batch: controls, perturbed cells, targets
-  target_labels_report.csv     every target label of every context that is not an exact panel symbol
-  panel_diff.csv               with --compare: targets new, dropped or kept relative to an earlier panel
-  summary.md                   one page
-"""
+"""Coverage of a challenge panel by the summarized contexts, written as CSV tables per panel."""
 import argparse
 import json
 import subprocess
@@ -37,8 +13,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 PROBES = ROOT / "data/raw/probeset/Chromium_Human_Transcriptome_Probe_Set_v1.0.1_GRCh38-2020-A.csv"
 CONTEXTS = ROOT / "workflow/contexts.csv"
-GATE_CPM = 5.0                                  # vcc2026 preset: genes tested only above 5 mean CPM in the controls
-BASE = "main"                                   # Michael's pipeline before the audit (mibohl/VCC2026 31d1e88)
+GATE_CPM = 5.0
+BASE = "main"
 MICHAEL = ["dataset", "context", "source_accession_publication", "lab_group", "perturbation_modality",
            "sequencing_tech", "n_targets", "n_panel_targets", "median_cells_per_target", "median_control_lib_size",
            "mean_reliability"]
@@ -206,7 +182,6 @@ def main():
     write(pd.DataFrame(bcov), "batch_coverage.csv")
     write(pd.DataFrame(lab), "target_labels_report.csv")
 
-    # targets: covered = the context has cells for the target
     order = meta.loc[configured].sort_values(["dataset", "cell_line"]).index
     cov = cells > 0
     tc = pd.DataFrame(index=pd.Index(panel_targets, name="panel_target"))
@@ -228,7 +203,6 @@ def main():
     cells[order].rename_axis("panel_target").reset_index().to_csv(out / "targets_by_context_cells.csv", index=False,
                                                                   lineterminator="\n")
 
-    # genes: measured per context
     gc = pd.DataFrame(index=pd.Index(genes, name="gene"))
     gc["n_contexts_measured"] = measured.sum(axis=1)
     gc["n_datasets_measured"] = measured.apply(lambda r: meta.loc[r.index[r], "dataset"].nunique(), axis=1)

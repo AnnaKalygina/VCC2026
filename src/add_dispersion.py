@@ -33,10 +33,10 @@ def cat(h, key):
         cats, codes = node["categories"][:], node["codes"][:]
     else:
         parent, leaf = key.rsplit("/", 1)
-        legacy = f"{parent}/__categories/{leaf}"              # anndata < 0.8: obs/__categories/<k>
+        legacy = f"{parent}/__categories/{leaf}"
         cats, codes = (h[legacy][:], node[:]) if legacy in h else (None, None)
     if cats is not None:
-        if (codes < 0).any():                                 # -1 = missing; indexing would return the last category
+        if (codes < 0).any():
             raise SystemExit(f"{key}: {int((codes < 0).sum())} missing values")
         return _dec(cats)[codes]
     if node.dtype.kind in "SO":

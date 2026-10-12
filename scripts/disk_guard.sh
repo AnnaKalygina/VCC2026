@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Cancel the job if the staged-download area grows past DISK_GUARD_BYTES (default 245 GB, Euler's
-# scratch budget; 0 disables). Only data/raw/_clean_tmp is scanned: a whole-repo du over retained raw
-# data on CephFS every minute is needlessly expensive.
 set -euo pipefail
 cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.."
 while kill -0 "$1" 2>/dev/null; do

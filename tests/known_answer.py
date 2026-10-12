@@ -1,13 +1,4 @@
-"""Known-answer check of one context's summary (AUDIT T2, T3, A6): the same cells, read with the same reader, gene
-map and label rule as src/clean/run.py, recomputed (T2) with dense NumPy/SciPy and (T3) with cell-eval2's own DE
-call at the vcc2026 preset (pdex backend, CPU). Compares with data/<context>.h5.
-
-    sbatch ... --wrap "bash scripts/run_job.sh pixi run python -u tests/known_answer.py --context adamson__k562"
-
-T2: mean CPM, log2 fold change and the two-sided Mann-Whitney p (scipy, asymptotic, continuity and tie corrected,
-on log1p CPM) of every target and measured gene. T3: cell-eval2 compute_de on the same cells; the significant set
-per target (5 CPM gate on the controls, BH per target at 0.05) from the summary's nlog10p must equal cell-eval2's.
-"""
+"""Known-answer check: recompute one context's summary with SciPy and with cell-eval2's DE on the same cells."""
 import argparse
 import json
 import sys
@@ -88,13 +79,12 @@ def main():
         worst_lfc = max(worst_lfc, float(np.nanmax(np.abs(lfc_s[i] - lfc))))
         p = mannwhitneyu(np.log1p(P), logC, axis=0, alternative="two-sided", method="asymptotic",
                          use_continuity=True).pvalue
-        p = np.where(np.isnan(p), 1.0, p)                   # all-zero gene in both groups
+        p = np.where(np.isnan(p), 1.0, p)
         p_ind[i] = p
-        fin = (p > 1e-290) & (nlp_s[i] < 290)            # both sides below double-precision underflow
+        fin = (p > 1e-290) & (nlp_s[i] < 290)
         worst_p = max(worst_p, float(np.max(np.abs(-np.log10(p[fin]) - nlp_s[i][fin]), initial=0)))
     d.update(mean_cpm_rel=worst_cpm, lfc=worst_lfc, nlog10p_vs_scipy=worst_p)
 
-    # T3: cell-eval2's own DE (vcc2026 preset values) on the same counts
     from cell_eval2.de_compute import compute_de
     adata = ad.AnnData(X.astype(np.float32), obs=pd.DataFrame({"target": lab}),
                        var=pd.DataFrame(index=vocab[midx]))

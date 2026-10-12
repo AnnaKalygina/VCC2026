@@ -5,8 +5,8 @@ import scipy.sparse as sp
 from downloads import download as fetch
 STUDIES = {"frangieh": ("FrangiehIzar2021_RNA.h5ad", "dc438f53c476a3dd562898654d48ed15", ["frangieh__control", "frangieh__ifng", "frangieh__coculture"]), "adamson": ("AdamsonWeissman2016_GSM2406681_10X010.h5ad", "2fa44ea61a8dd35742af618638ec65fc", ["adamson__k562"]), "sunshine": ("SunshineHein2023.h5ad", "739f42ccb24815c4ac1d8ca6d4aa85d8", ["sunshine__calu3"])}
 RECORD = "https://zenodo.org/records/7416068/files/{}"
-RECORDS = {"sunshine": "https://zenodo.org/records/10044268/files/{}"}   # studies outside RECORD
-CONTROL_LABELS = {"control"}   # Frangieh obs['perturbation'] control value (lower-cased, stripped)
+RECORDS = {"sunshine": "https://zenodo.org/records/10044268/files/{}"}
+CONTROL_LABELS = {"control"}
 
 
 def download(study, raw_dir):

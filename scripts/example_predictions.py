@@ -1,5 +1,4 @@
-"""Zero-LFC example using only H1 gene names and target labels, or with --oracle-from a summary of the H1 cells
-themselves (data/vcc2025__H1.h5): its measured LFCs, an in-sample upper bound, never a submission."""
+"""Zero-LFC example from H1 gene names and target labels, or the H1 summary's own LFCs as an oracle."""
 import argparse
 from pathlib import Path
 import sys

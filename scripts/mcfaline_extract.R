@@ -1,17 +1,11 @@
-# Extract the raw counts + cell metadata of the McFaline-Figueroa et al. 2024 sci-Plex-GxE kinome screen
-# (GEO GSM7056149, sciPlexGxE_2_preprocessed_cds.list.RDS.gz: a list of three monocle3 cell_data_sets, one per line,
-# gzip-compressed twice) into the flat layout of scripts/viperturb_extract.R, one directory per line.
-# monocle3 is not installed; S4 slots are plain attributes, so attr() reaches them. R only moves bytes.
-#
-#   Rscript scripts/mcfaline_extract.R <in.RDS.gz> <out_dir>      -> <out_dir>/<line>/{i,p,x}.bin, genes.txt,
-#                                                                    ensembl.txt, cells.txt, meta.csv, info.txt
+# Rscript scripts/mcfaline_extract.R <in.RDS.gz> <out_dir>: write each line's raw counts and cell metadata as flat files.
 suppressPackageStartupMessages(library(Matrix))
 args <- commandArgs(trailingOnly = TRUE)
 x <- readRDS(gzcon(gzfile(args[1])))
 for (line in names(x)) {
   o <- x[[line]]; d <- file.path(args[2], line)
   dir.create(d, showWarnings = FALSE, recursive = TRUE)
-  cnt <- attr(get("data", envir = attr(attr(o, "assays"), ".xData")), "listData")$counts   # ShallowSimpleListAssays
+  cnt <- attr(get("data", envir = attr(attr(o, "assays"), ".xData")), "listData")$counts
   if (!inherits(cnt, "dgCMatrix")) stop(line, ": counts are ", class(cnt)[1], ", expected dgCMatrix")
   if (any(cnt@x != round(cnt@x)) || any(cnt@x < 0)) stop(line, ": counts are not raw integers")
   md <- as.data.frame(attr(attr(o, "colData"), "listData"), stringsAsFactors = FALSE)

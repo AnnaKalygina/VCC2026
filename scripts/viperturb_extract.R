@@ -86,7 +86,7 @@ for (k in colnames(md)) {
   else if (!is.numeric(v)) print(head(sort(table(v, useNA = "ifany"), decreasing = TRUE), 8))
 }
 write.csv(cbind(data.frame(cell = rownames(md), stringsAsFactors = FALSE), md),
-          file.path(outdir, "meta.csv"), row.names = FALSE)   # base R: the pixi environment has no data.table
+          file.path(outdir, "meta.csv"), row.names = FALSE)
 
 # --- counts: chunked writeBin (a single call is capped at 2^31-1 bytes) ------------------------
 wr <- function(v, path, as_int) {

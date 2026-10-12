@@ -1,32 +1,4 @@
-"""Can two contexts be pooled? Agreement of the effect vectors of the targets they share, against the agreement
-each context has with itself.
-
-    pixi run python scripts/mergeability.py [--summaries data] [--out results/mergeability] [--min-shared 20]
-                                            [--effects auto|pooled|batchmatched] [--contexts ...]
-
-Effects are the split-0 half deltas of mean log1p CP10k against the context's own controls: the batch-matched ones
-(pert/half_delta_bm_A/B, each half against controls mixed by its own cells per batch, AUDIT N8) where the context has
-batches, else the pooled ones (pert/half_delta_A/B); --effects pooled or batchmatched forces one kind (a context
-without batch-matched fields is then skipped); the column `effects` in pairs.csv says which,
-so within- and cross-context agreement use one statistic and one gene set: per pair, the genes measured in both
-and above 5 mean CPM in both control pools, minus the target's own gene. Per pair and shared target:
-
-  r              Pearson of the full effect vectors (mean of the two halves)
-  r_centered     the same after removing each context's mean response over the shared targets
-  rel_a, rel_b   each context's own reliability on the same genes: Spearman-Brown of the half-vs-half Pearson
-  r_disatt       r / sqrt(rel_a rel_b): about 1 when the two contexts measure the same effect up to noise
-  slope          Deming slope of b on a, error variance ratio from the halves (var(dA - dB) / 4 per context)
-  sign_agree     share of genes significant in both (BH per target at 0.05 on the summary's p) with equal sign
-  r_batchmatched Pearson of the batch-matched log2 fold changes on the genes significant in either context
-  slope_lfc      Deming slope on the log2 fold changes of mean CPM (the scorer's DE fold change, batch-matched when
-                 the effects are) over genes significant in both (10 or more), error variance ratio from the per-gene
-                 standard errors of mean CPM; unlike the half deltas this does not grow with sequencing depth
-
-Targets are binned by effect strength in the weaker context (its significant genes). r_disatt and both slopes are
-summarized only over targets with rel >= 0.3 in both contexts (with less, noise in the denominator dominates).
-Writes pairs.csv (pair x target) and pair_summary.csv (medians per pair and strength bin, with bootstrap 95%
-intervals over targets for r_disatt, slope and slope_lfc, and each context's median control depth).
-"""
+"""Pairwise agreement of shared targets' effects between contexts, against each context's own reliability."""
 import argparse
 import itertools
 from pathlib import Path
@@ -60,7 +32,7 @@ def load(path, targets, effects="auto"):
         order = np.argsort(pos)
         back = np.argsort(order)
         rows = pos[order]
-        get = lambda k: h[k][rows][back].astype(np.float64)     # h5py fancy index wants increasing rows
+        get = lambda k: h[k][rows][back].astype(np.float64)
         return dict(genes=_s(h["genes"][:]), measured=h["measured"][:].astype(bool),
                     gated=h["control/mean_cpm"][:] > GATE, dA=get(f"pert/half_delta{bm}_A"), dB=get(f"pert/half_delta{bm}_B"),
                     effects="batch-matched" if bm else "pooled",

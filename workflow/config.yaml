@@ -1,8 +1,5 @@
 # data contexts: reader (src/clean/readers.py) + args + Slurm resources.
 # mem_mb: engine accumulators are ~84 B x targets x measured genes + the control pool; revised from measured peak RSS
-# (VIPerturb OOM at 48 GB, Orion 55-61 GB mid pass 2 -> 96 GB for the ~18k-target screens); the standard errors and
-# half-delta vectors add ~24 B, per-donor sums (<= 10 batches) 4 B x (batches + 1).
-# min_umi (default 1000): vocab-UMI cutoff per cell; H1 keeps every cell the scorer would (any vocab UMI).
 contexts:
   vcc2025__H1:            {reader: h1, min_umi: 1, mem_mb: 32000, runtime: 240, cpus: 4}
   adamson__k562:          {reader: scperturb, args: {study: adamson, context: adamson__k562}, mem_mb: 16000, runtime: 240, cpus: 4}

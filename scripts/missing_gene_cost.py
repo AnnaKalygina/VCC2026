@@ -1,21 +1,4 @@
-"""What a context's missing panel genes cost, measured on H1 2025 (the one held-out set with the 2026 panel).
-
-    pixi run python scripts/missing_gene_cost.py --bundle <controls dir> [--summaries data] [--out results/coverage]
-
-For every H1 target p, S_p is its significant gene set as the scorer would call it: H1 control mean CPM > 5, the
-summary's two-sided Mann-Whitney p, BH per target at 0.05. For each context c with measured genes M_c:
-
-  set_share        |S_p - M_c| / |S_p|: the part of S_p a model trained on c cannot see (caps the recall terms of
-                   jac, reach and the yield part of fid; unmeasured genes predicted as no change are never called)
-  magnitude_share  sum |lfc| over S_p - M_c / sum |lfc| over S_p (lfc_nmae with an unmeasured gene predicted as 0)
-  norm_share       share of the squared H1 effect norm that falls on unmeasured genes (pds, mse); effects are the
-                   mean of the two split-0 half deltas of mean log1p CP10k, so barely expressed genes with huge
-                   log2 ratios do not dominate
-
-H1 lacks the 454 panel genes without an included Flex probe, so their cost is invisible here; the bound is how many
-of them pass the 5 CPM gate in the bundle's contexts. Writes <out>/<panel_id>/missing_gene_cost.csv (context x H1
-target) and missing_gene_cost_summary.csv (per context: median and mean over H1 targets with |S_p| >= 10).
-"""
+"""Cost of each context's missing panel genes, measured on H1's significant gene sets."""
 import argparse
 import json
 from pathlib import Path
@@ -85,7 +68,6 @@ def main():
         norm_share_median=("norm_share", "median"), norm_share_mean=("norm_share", "mean")).reset_index()
     summ.to_csv(out / "missing_gene_cost_summary.csv", index=False)
 
-    # bound for the panel genes H1 does not measure
     gated = pd.DataFrame({c: ct.gate(bundle / f"context_{c}.h5ad", genes) for c in man["contexts"]}, index=genes)
     noprobe = ct.no_included_probe(genes)
     h1_missing = ~ref_meas

@@ -61,8 +61,6 @@ for group in (0, 1):
     np.testing.assert_allclose(res['lfc'][group], np.log2((x.mean(0) + 1e-9) / (cpm.mean(0) + 1e-9)), atol=1e-5)
     p = mannwhitneyu(x, cpm, axis=0, method='asymptotic', use_continuity=True).pvalue
     np.testing.assert_allclose(res['nlog10p'][group], -np.log10(p), atol=1e-5, rtol=1e-5)
-# Batch-matched reference, per-gene SE and half deltas against brute force: 3 batches, the third
-# without controls; batch sums are kept (B <= MAX_BATCH_SUMS).
 from stats import MIN_CTRL_BATCH
 cb = np.repeat([0, 1], 16)
 ctrl_b = np.vstack([ctrl, rng.poisson(80, (2 * MIN_CTRL_BATCH - 32, 24))])
@@ -90,12 +88,9 @@ for group in (0, 1):
     assert np.isfinite(rb['half_delta_A'][group]).all() and np.isfinite(rb['half_delta_B'][group]).all()
 np.testing.assert_allclose(rb['control']['mean_cpm_by_batch'], cm_b, rtol=1e-5)
 np.testing.assert_allclose(rb['control']['se_cpm'], (ctrl_b / lcb[:, None] * 1e6).std(0, ddof=1) / np.sqrt(len(cb)), rtol=1e-5)
-# Half deltas reproduce the split-0 reliability correlation over all genes.
 r0 = np.corrcoef(rb['half_delta_A'][0], rb['half_delta_B'][0])[0, 1]
 np.testing.assert_allclose(r0, rb['reliability_r'][0, 0], rtol=1e-4)
 assert 'lfc_batchmatched' not in res and np.isfinite(res['se_cpm']).all()
-# Batch-matched half deltas against brute force: each half against the control halves of each batch, weighted
-# by that half's own cells per batch (AUDIT N8).
 from stats import _half_codes
 rank = np.zeros(40, np.int64)
 for group in (0, 1):
@@ -111,7 +106,6 @@ for group in (0, 1):
         np.testing.assert_allclose(rb[key][group], lg_p[cells].mean(0) - w @ cm / w.sum(), atol=1e-5)
 r0 = np.corrcoef(rb['half_delta_bm_A'][0], rb['half_delta_bm_B'][0])[0, 1]
 np.testing.assert_allclose(r0, rb['reliability_r_batchmatched'][0, 0], rtol=1e-4)
-# Gene-major block mode (KOLF, Feng) must equal row mode on the same cells, batches included.
 from readers import run_gene_major
 allx = sp.vstack([sp.csr_matrix(ctrl_b), sp.csr_matrix(pert)]).tocsc()
 is_c = np.r_[np.ones(len(cb), bool), np.zeros(40, bool)]
@@ -125,13 +119,10 @@ for k in ('mean_cpm', 'lfc', 'nlog10p', 'se_cpm', 'lfc_batchmatched', 'half_delt
           'half_delta_bm_A', 'reliability_r_batchmatched'):
     np.testing.assert_allclose(rg[k], rb[k], rtol=1e-5, atol=1e-6, err_msg=k)
 
-# Gene axis: an HGNC previous symbol fills its panel gene, an alias is only reported, and a rescue never takes a
-# panel gene that an exact symbol already measures (AUDIT N9).
 from genes import GeneMap
 gm_h = GeneMap(np.array(['ATP5A1', 'DWORF', 'TSPAN6', 'FAM206A', 'ABITRAM']))
 assert gm_h.report['hgnc'] == 1 and ['ATP5A1', 'ATP5F1A', 'previous'] in gm_h.report['hgnc_renamed']
 assert ['DWORF', 'STRIT1'] in gm_h.report['hgnc_alias_not_applied'] and gm_h.report['rescue_shadowed'] == 1
-# One target-label rule for every reader (AUDIT S10).
 from labels import TargetLabels
 from types import SimpleNamespace
 vocab = np.array(['HLA-B', 'HSPE1', 'MOB4', 'AARS1', 'G1'])
@@ -146,13 +137,11 @@ rep = tl.report({'XYZ': 7})
 assert rep['actions']['sentinel'] == 2 and {r['raw'] for r in rep['changed']} == {'*', 'nan', 'hla-b', 'HLA_B', 'AARS', 'HSPE1_MOB4', 'XYZ', 'MOB4A'}
 assert [r['merged_with'] for r in rep['changed'] if r['raw'] == 'MOB4A'] == [['MOB4']]
 
-# Frangieh guides (AUDIT S2): one gene (any of its guides, control guides allowed) or only control guides.
 from readers import frangieh_labels
 c, lab = frangieh_labels(np.array(['A_1', 'A_1;A_3', 'A_1;B_2', 'NO_SITE_4', 'NO_SITE_4;ONE_NON-GENE_SITE_9',
                                    'A_1;NO_SITE_2', 'A_1;NO_S', np.nan], dtype=object))
 assert c.tolist() == [0, 0, 0, 1, 1, 0, 0, 0] and lab.tolist() == ['A', 'A', '', '', '', 'A', '', '']
 
-# hESC guide calling (AUDIT S9): guides summed per gene, top >= 5 UMI, second gene <= 0.2 x top.
 from ingest_gse295214 import read_sample
 with tempfile.TemporaryDirectory() as name:
     f = Path(name) / 'lane.h5'
@@ -205,8 +194,6 @@ with tempfile.TemporaryDirectory() as name:
         h['obs/_index'][0] = b'BAD'
     rejects(lambda: validate_h1(tmp))
 
-# Mergeability: two contexts measuring one effect plus independent noise agree up to noise (r_disatt about 1,
-# slope about 1); a context with twice the fold changes gives slope_lfc about 2.
 from mergeability import compare
 rng = np.random.default_rng(5)
 T, G = 30, 400

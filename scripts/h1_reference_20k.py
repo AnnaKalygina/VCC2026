@@ -1,14 +1,4 @@
-"""H1 as a 2026-style reference (AUDIT A2): 400 cells per target, 18,400 control cells, raw counts binomially thinned
-so the median control library is 20,000 UMI (the 2026 controls' depth; H1's own is about 54,600).
-
-    pixi run python scripts/h1_reference_20k.py [--holdout results/h1_heldout/seed0/holdout.npz] [--seed 0]
-                                                [--out data/vcc2025/h1_reference_20k.h5ad]
-
-Every count c becomes Binomial(c, p) with one p = 20,000 / median control library for all cells, which keeps each
-cell's composition and the spread of depths. With --holdout, a target's 400 cells are drawn only from the cells the
-held-out prediction was not built from, so the same reference scores held-out predictions. obs: target_gene
-(controls 'non-targeting'), batch (H1 Flex batch).
-"""
+"""H1 as a 2026-style reference: 400 cells per target, 18,400 controls, thinned to a 20k control depth."""
 import argparse
 from pathlib import Path
 

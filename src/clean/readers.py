@@ -6,8 +6,7 @@
                           (labels: target name per row; "" = drop the row)
     .targets           all target labels (available once .controls() is exhausted)
     .provenance        dict merged into the output json
-    .batch_key         what the batch labels are (None: the deposit has no batch structure we use,
-                       and every chunk's batches is None)
+    .batch_key         what the batch labels are, or None
 
 or, for gene-major sources (CSC / gene-row text), `.run_blocks(engine, gene_map, label_index)` plus
 `.is_ctrl` and `.batch_labels` (per cell, or None).
@@ -74,8 +73,7 @@ def obs_strings(h, key):
 
 
 def check_counts(X, where):
-    """Refuse non-integer matrices: everything downstream assumes raw UMI counts. run.py calls it on every chunk
-    and run_gene_major on every gene block."""
+    """Refuse matrices that are not raw non-negative integer counts."""
     d = X.data[:2_000_000]
     bad = int((d != np.round(d)).sum())
     if bad or (d < 0).any():
@@ -131,8 +129,7 @@ class H1:
 
 # ----------------------------------------------------------------------------------- shared helpers
 def raw_file(source, name):
-    """data/raw/<source>/<name> as fetched by scripts/fetch_raw.py, with its download receipt. Summaries never
-    download (LeoMed compute nodes are offline) and never delete raw files."""
+    """data/raw/<source>/<name> and its download receipt; refuse a missing or incomplete file."""
     path = ROOT / "data/raw" / source / name
     receipt = ROOT / "data/provenance" / (hashlib.sha256(str(path.resolve()).encode()).hexdigest() + ".json")
     if not path.exists() or not receipt.exists():
@@ -222,8 +219,8 @@ class GeneMajor:
 
 def run_gene_major(blocks, eng, L, grp, is_ctrl, qc, log, min_umi, batch_labels=None):
     """Feed complete gene blocks to the engine. L: vocab depth per cell (from a first pass),
-    grp: target index per cell (-1 = drop), is_ctrl: control mask, batch_labels: per cell (None without
-    batches). Applies the UMI filter."""
+    grp: target index per cell (-1 = drop), is_ctrl: control mask, batch_labels: per cell or None.
+    Applies the UMI filter."""
     from stats import batch_codes
     bat = None if batch_labels is None else batch_codes(batch_labels, eng.batches)
     ok = L >= min_umi
@@ -253,10 +250,7 @@ FRANGIEH_CTRL_GUIDES = ("NO_SITE", "ONE_NON-GENE_SITE")
 
 
 def frangieh_labels(guide_id):
-    """Per cell (is_control, target) from Frangieh's guide_id ('GENE_k;NO_SITE_j;...'). The `perturbation` column
-    hides multi-guide cells (AUDIT S2), so: control = only NO_SITE / ONE_NON-GENE_SITE guides; perturbed = guides
-    of exactly one gene (any number of its guides, control guides allowed); dropped (target "") = no guide, two or
-    more genes, or a guide name cut off by the deposit's 100-character limit (only cells with 8+ guides)."""
+    """Per cell (is_control, target) from guide_id: controls carry only control guides, targets one gene."""
     guide = re.compile(r"^(.+)_(\d+)$")
     is_ctrl = np.zeros(len(guide_id), bool)
     lab = np.full(len(guide_id), "", dtype=object)
@@ -275,11 +269,8 @@ def frangieh_labels(guide_id):
 
 
 class ScPerturb:
-    """scPerturb h5ad (Zenodo 7416068, Sunshine from 10044268; md5-pinned by scripts/summarize_scperturb.py).
-    Single-gene perturbations only. Sunshine 2023 (Calu-3, hCRISPRi-v2 guides with direct capture although obs says
-    CRISPR-cas9) is a high-MOI screen: `perturbation` names the genes of all a cell's guides, so perturbed = one gene
-    (any number of its guides), controls = 'control' (only non-targeting guides); batches = gem groups."""
-    batch_key = None                                   # Sunshine sets its gem groups per instance
+    """scPerturb h5ad (Adamson, Frangieh, Sunshine): single-gene perturbations and control-only cells."""
+    batch_key = None
 
     def __init__(self, study, context, tmp):
         sys.path.insert(0, str(ROOT / "scripts"))
@@ -307,7 +298,7 @@ class ScPerturb:
             is_ctrl = p == "control"
             one = (a.obs["nperts"].to_numpy() >= 1) & ~is_ctrl & ~pd.Series(p).str.contains("_").to_numpy()
             tg = np.where(one, p, "").astype(object)
-        else:                                                                     # frangieh
+        else:
             is_ctrl, tg = frangieh_labels(a.obs["guide_id"].astype(object).to_numpy())
         compound = pd.Series(tg).str.contains(r"[+;,]").to_numpy()
         lab = np.where(is_ctrl, "", np.where(compound, "", tg)).astype(object)
@@ -412,8 +403,7 @@ class Feng:
 class DLD1:
     """GEO GSE337988 Low-MOI dense h5 + colData; cell QC as ingest_gse337988.cell_table (hashtag + guide
     singlets, second caller agrees, no NTC_MENG). Groups are TSS groups; post_result keeps one TSS per
-    gene: the strongest own-gene knockdown in half A of the split-0 halves among TSS groups with >= 20 cells (else
-    the largest group), so the choice does not rest on the full set of cells it then summarizes."""
+    gene: the strongest own-gene knockdown in half A among TSS groups with >= 20 cells (else the largest group)."""
     URL = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE337nnn/GSE337988/suppl/GSE337988_sublib2_processed_objects_Low_assays.h5"
     batch_key = "colData Sample (10x channel)"
 
@@ -421,7 +411,7 @@ class DLD1:
         import ingest_gse337988 as m
         self.m, self.procs = m, procs
         self.path, receipt = raw_file("gse337988", self.URL.rsplit("/", 1)[1])
-        m.H5 = str(self.path)                               # _read_block (forked workers) reads m.H5
+        m.H5 = str(self.path)
         self.rows, code, names, self.gene_of, _ = m.cell_table(min_cells=1)
         self.lab = names[code]
         self.bat = pd.read_csv(ROOT / m.COLDATA, usecols=["Sample"], dtype=str)["Sample"].to_numpy()[self.rows]
@@ -469,7 +459,7 @@ class DLD1:
             k = np.flatnonzero(genes == g)
             big = k[res["n_cells"][k] >= 20]
             kd = res["half_delta_A"][big, own_idx[big[0]]] if len(big) and own_idx[big[0]] >= 0 else []
-            if np.isfinite(kd).any():                   # chosen on half A of the cells, not on the cells it reports
+            if np.isfinite(kd).any():
                 keep.append(big[np.nanargmin(kd)])
             else:
                 keep.append(k[np.argmax(res["n_cells"][k])])
@@ -480,8 +470,7 @@ class DLD1:
 
 # ----------------------------------------------------------------------------------- GSE295214 hESC
 class HESC:
-    """GEO GSE295214: 85 Cell Ranger h5 from data/raw, guide calling as ingest_gse295214.read_sample (guide UMIs
-    summed per gene; top gene >= 5 UMI, every other gene <= 0.2 x the top gene)."""
+    """GEO GSE295214: 85 Cell Ranger h5 files, guides called per gene by ingest_gse295214.read_sample."""
     batch_key = "GEO sample file (10x lane)"
 
     N_SAMPLES = 85
@@ -525,8 +514,7 @@ class HESC:
 # ----------------------------------------------------------------------------------- VIPerturb K562
 class VIPerturb:
     """Zenodo 18460279 genome_wide_bin{A,B,C}.RDS -> scripts/viperturb_extract.R triplets (one bin on disk at a
-    time). All three bins carry the SAME non-targeting cells (the manifest lists 7,949 in each; cells() checks the
-    barcodes bin by bin), so controls come from bin A only."""
+    time). All three bins carry the SAME non-targeting cells, so controls come from bin A only."""
     batch_key = "meta.data sample (10x lane)"
     ZEN = "https://zenodo.org/api/records/18460279"
 
@@ -590,13 +578,12 @@ class VIPerturb:
             shutil.rmtree(self.tmp / f"bin{b}")
 
     def cleanup(self):
-        shutil.rmtree(self.tmp)                            # extracted triplets only; the RDS files stay
+        shutil.rmtree(self.tmp)
 
 
 # ----------------------------------------------------------------------------------- X-Atlas/Orion
 class Orion:
-    """HF Xaira-Therapeutics/X-Atlas-Orion parquet shards (revision pinned in scripts/fetch_raw.py), read shard by
-    shard twice (controls first; every shard holds ~5% controls), next shard prefetched. pass_guide_filter == 1 only."""
+    """X-Atlas/Orion parquet shards read one by one, controls first, the next shard prefetched."""
     CTRL = "Non-Targeting"
     batch_key = "parquet shard (one GEM sample each)"
 
@@ -683,10 +670,7 @@ class ReplogleRows:
 
 # ----------------------------------------------------------------------------------- KOLF2.1J
 class Kolf:
-    """figshare+ 27261219 KOLF_Pan_Genome_QC_Filtered.h5ad (189 GB), `layers/counts` CSC, read from data/raw
-    in column blocks: pass 1 = vocab depth per cell, pass 2 = the statistics, gene block by gene block.
-    Controls: obs/perturbed == 'False' (the deposit's own non-targeting flag); targets obs/gene_target.
-    Batch column to be chosen once the deposit is on disk."""
+    """KOLF2.1J h5ad (figshare+ 27261219) read in gene blocks from its CSC counts."""
     batch_key = None
     batch_labels = None
 
@@ -752,17 +736,11 @@ class Kolf:
 
 # ----------------------------------------------------------------------------------- CD4+ T (Marson 2025)
 class CD4T:
-    """Genome-scale CRISPRi in primary CD4+ T cells, 4 donors pooled into one context per condition. Counts: GEO
-    GSE314342 per-lane Cell Ranger matrices (one file per lane x donor x condition; the same cells and counts as
-    the authors' S3 h5ad files; two Stim8hr lanes truncated on GEO come from the S3 files). Labels: the authors'
-    S3 obs tables (scripts/fetch_cd4t_obs.py). Cells: guide_group == 'targeting single sgRNA' and not low_quality;
-    controls guide_type == 'non-targeting'; targets perturbed_gene_name. Batch: donor."""
+    """Primary CD4+ T cells: GEO GSE314342 lane matrices with the authors' guide calls, donors as batches."""
     DONORS = ("D1", "D2", "D3", "D4")
     RAW = ROOT / "data/raw/cd4t_marson2025"
     CTRL = "\0ctrl"
-    MAX_MISSING = 0.05                                   # largest share of a lane's annotated cells GEO may lack
-    # GEO's matrices of these lanes are truncated on GEO itself (AUDIT N1); their cells come from the authors' S3
-    # h5ad instead (scripts/fetch_cd4t_s3_lanes.py)
+    MAX_MISSING = 0.05
     TRUNCATED_ON_GEO = {("D1", "Stim8hr", "R1L14"), ("D4", "Stim8hr", "R2L09")}
     batch_key = "donor"
 
@@ -793,8 +771,6 @@ class CD4T:
                 m = lane == ln
                 self.files.append((d, path))
                 self.meta.append((barcode[m], lab[m]))
-        # Sequencing runs list the same genes in different orders (by id or by position): every lane is mapped
-        # onto the first lane's gene order by Ensembl id.
         self.cols = []
         for _, path in self.files:
             with h5py.File(path) as h:
@@ -821,8 +797,6 @@ class CD4T:
                 X = sp.csc_matrix((m["data"][:], m["indices"][:], m["indptr"][:]), shape=(n_feat, n_bc)).T.tocsr()
                 file_bc = _dec(m["barcodes"][:])
             pos = pd.Index(file_bc).get_indexer(bc)
-            # GEO's Cell Ranger cell calls drop a few of the authors' cells in some lanes (resting: lane R1L06 of
-            # D1 and D2, 7,605 of 11.5M cells, spread over guide groups like the whole lane); dropped and recorded
             if (pos < 0).mean() > self.MAX_MISSING:
                 raise SystemExit(f"{path}: {int((pos < 0).sum())} annotated cells missing from the GEO matrix")
             if (pos < 0).any() and want_ctrl:
@@ -840,16 +814,11 @@ class CD4T:
 
 
 
-# ----------------------------------------------------------------------------------- Jiang 2025 (Satija lab)
 class Jiang:
-    """Zenodo 14518762 Seurat_object_<PATHWAY>_Perturb_seq.rds (Jiang et al. 2025): CRISPRi (dCas9-KRAB-MeCP2),
-    Parse Evercode WT Mega, 24 h stimulation with the pathway's cytokine; each object holds six lines. One context =
-    one line x pathway; controls = guide gene 'NT' (14 non-targeting guides). Cells whose sample is 'unknown_unknown'
-    (no line from the fixation well; their cell_type is only inferred) are dropped. Each object is extracted once by
-    scripts/viperturb_extract.R into data/raw/jiang2025/extract/<PATHWAY> and kept for the other lines."""
+    """Jiang 2025 Seurat objects, one context per cell line and pathway stimulation."""
     batch_key = "meta.data Batch_info (replicate)"
     ZEN = "https://zenodo.org/api/records/14518762"
-    PATHWAYS = {"IFNB": "IFNB", "IFNG": "IFNG", "INS": "INS", "TGFB": "TGFB1", "TNFA": "TNFA"}   # file name: obs label
+    PATHWAYS = {"IFNB": "IFNB", "IFNG": "IFNG", "INS": "INS", "TGFB": "TGFB1", "TNFA": "TNFA"}
     LINES = ("A549", "BXPC3", "HAP1", "HT29", "K562", "MCF7")
     CTRL = "non-targeting"
 
@@ -882,9 +851,9 @@ class Jiang:
         import fcntl
         d = ROOT / "data/raw/jiang2025/extract" / pathway
         d.parent.mkdir(parents=True, exist_ok=True)
-        with open(d.parent / f"{pathway}.lock", "w") as lock:       # the six line contexts share one extract
+        with open(d.parent / f"{pathway}.lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            if not (d / "info.txt").exists():                     # written last by the extract
+            if not (d / "info.txt").exists():
                 rds, _ = raw_file("jiang2025", f"Seurat_object_{pathway}_Perturb_seq.rds")
                 subprocess.run(["Rscript", "scripts/viperturb_extract.R", str(rds), str(d)], check=True, cwd=ROOT)
         return d
@@ -913,13 +882,8 @@ class Jiang:
 
 
 
-# ----------------------------------------------------------------------------------- Replogle 2020 (exp6)
 class Replogle2020:
-    """GEO GSM4367984 (Replogle et al. 2020, experiment 6, K562 CRISPRi, 10x 3' v3, guides by direct capture):
-    MatrixMarket counts + the authors' per-cell guide identities (a dual-guide vector, positions A and B). Controls =
-    cells whose two guides are both non-targeting (`control`); perturbed = `single` cells (one targeting guide plus
-    a non-targeting one), labelled by the targeting guide's Ensembl id as named in features.tsv, so a gene's second
-    guide pair (FDPS_2, HUS1_2) joins the gene. Two-gene cells (`double`) and cells without an identity are dropped."""
+    """GEO GSM4367984, Replogle 2020 experiment 6: single-gene and both-non-targeting cells."""
     batch_key = "gem group (barcode suffix)"
     GEO = "GSM4367984"
     CTRL = "non-targeting"
@@ -950,7 +914,7 @@ class Replogle2020:
         self.X = None
 
     def _matrix(self):
-        if self.X is None:                                  # features x barcodes MatrixMarket, ~0.9 GB gzip
+        if self.X is None:
             m = pd.read_csv(self.mtx, sep=" ", comment="%", header=None, dtype=np.int64).to_numpy()
             (n_f, n_c, nnz), m = m[0], m[1:]
             assert len(m) == nnz and n_c == len(self.lab)
@@ -970,13 +934,8 @@ class Replogle2020:
 
 
 
-# ----------------------------------------------------------------------------------- McFaline-Figueroa 2024 kinome
 class McFaline:
-    """GEO GSM7056149 (McFaline-Figueroa et al. 2024, sci-Plex-GxE, CRISPRi dCas9-KRAB against 522 kinases in
-    A172, T98G and U87MG): the authors' monocle3 objects, extracted per line by scripts/mcfaline_extract.R into
-    data/raw/mcfaline2023/extract/<line> and kept. One context = one line under vehicle (DMSO); the drug arms are left
-    out. Perturbed = cells with one called guide (guide_number 1); controls = their NTC guides. Cells with a `random`
-    guide, several guides or none are dropped. Batches = the authors' replicate."""
+    """GEO GSM7056149, McFaline-Figueroa 2024: vehicle cells of one glioblastoma line, NTC controls."""
     batch_key = "colData replicate"
     GEO = "GSM7056149"
     LINES = ("A172", "T98G", "U87MG")

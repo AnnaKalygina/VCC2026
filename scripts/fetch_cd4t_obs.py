@@ -1,11 +1,4 @@
-"""Save the authors' per-cell metadata (obs) of the 12 CD4 T S3 h5ad files without downloading their counts.
-
-The counts come from GEO GSE314342 (scripts/fetch_raw.py, NCBI route), which holds the same cells with identical
-counts; only the authors' guide calls and QC flags (guide_group, guide_id, guide_type, low_quality,
-perturbed_gene_name, lane_id, ...) live in the S3 files. Each obs table is read by HTTP range requests
-(src/remote_h5.py) and written to data/raw/cd4t_marson2025/obs/<donor>_<condition>.obs.parquet with a JSON receipt.
-Run where the S3 bucket is reachable (LeoMed: the session node, VCC_LOCAL_DOWNLOAD=1).
-"""
+"""Save the per-cell metadata of the 12 CD4 T S3 h5ad files without their counts."""
 import hashlib
 import json
 import os

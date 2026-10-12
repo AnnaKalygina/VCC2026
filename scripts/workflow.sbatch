@@ -6,7 +6,6 @@
 #SBATCH -J vcc_stats
 set -euo pipefail
 # Submit from the project root: sbatch scripts/workflow.sbatch [targets...]
-# On LeoMed: sbatch -p compute --export=ALL,WORKFLOW_PROFILE=leomed scripts/workflow.sbatch [targets...]
 cd "${SLURM_SUBMIT_DIR:?}"
 test -f workflow/Snakefile
 mkdir -p logs/slurm

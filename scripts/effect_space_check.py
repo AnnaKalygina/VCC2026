@@ -1,23 +1,4 @@
-"""Does the expression space of the effects change what mergeability concludes? (plan M1, scorer-space check)
-
-    pixi run python -u scripts/effect_space_check.py [--pairs vcc2025__H1:gse295214__hesc ...] [--out ...]
-
-The stored half deltas are per-cell means of log1p CP10k, but the scorer reads effects in two other spaces
-(cell-eval2 vcc2026 preset): the DE metrics in per-cell CPM (fold change = log2 of the mean CPM ratio, eps 1e-9)
-and pds/mse in group-sum space, log1p(5e4 x gene sum / total sum). This script reads each context's cells again
-through its reader, splits every shared target's cells and the controls into random halves, and computes the
-half effects in all three spaces:
-
-  cp10k    mean log1p(CP10k) of the half minus that of the control half (the stored statistic)
-  cpm_lfc  log2((mean CPM of the half + eps) / (mean CPM of the control half + eps))
-  bulk     log1p(5e4 S_g / S) of the half minus that of the control half, S = summed counts
-
-Per pair, shared target and space, on genes measured in both contexts and above 5 CPM in both control pools
-(minus the target's own gene): reliability (Spearman-Brown of the half-vs-half Pearson), r of the full effects,
-r_disatt = r / sqrt(rel_a rel_b) and a Deming slope (error variance ratio from the halves). Effects are against the
-pooled controls in every space, so the stored-statistic row is comparable with mergeability --effects pooled.
-Writes per_target.csv and summary.csv (medians over targets with reliability >= 0.3 in both, bootstrap 95%).
-"""
+"""Split-half agreement of context pairs recomputed in the scorer's CPM and group-sum spaces."""
 import argparse
 import sys
 from pathlib import Path
@@ -42,8 +23,7 @@ EPS, BULK, GATE = 1e-9, 5e4, 5.0
 
 
 def half_sums(context, keep_targets, vocab, seed):
-    """Per target and half (and for the control halves): summed counts, summed CPM fraction, summed log1p CP10k,
-    cells and summed library size, on the vocab axis (NaN where the context does not measure a gene)."""
+    """Per target half and control half: summed counts, CPM fractions, log1p CP10k, cells and depths."""
     cfg = yaml.safe_load(open(ROOT / "workflow/config.yaml"))["contexts"][context]
     src = READERS[cfg["reader"]](tmp=ROOT / "data/raw/_clean_tmp" / context, **cfg.get("args", {}))
     assert not hasattr(src, "run_blocks"), f"{context}: gene-major readers are not supported here"
@@ -52,7 +32,7 @@ def half_sums(context, keep_targets, vocab, seed):
     min_umi = cfg.get("min_umi", MIN_UMI)
     rng = np.random.default_rng([seed, 31])
     G = len(gm.measured_idx)
-    K = len(keep_targets) * 2 + 2                       # groups: (target, half) ..., control half A, control half B
+    K = len(keep_targets) * 2 + 2
     acc = {k: np.zeros((K, G)) for k in ("S", "F", "Q")}
     n, Lsum = np.zeros(K), np.zeros(K)
 

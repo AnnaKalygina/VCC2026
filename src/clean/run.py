@@ -54,7 +54,7 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "data"))
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
-    code = git_state()                                    # at start: the code this run actually loaded
+    code = git_state()
     if not os.environ.get("SLURM_JOB_ID"):
         ap.error("Real statistics processing requires Slurm")
     os.chdir(ROOT)
@@ -64,9 +64,8 @@ def main():
     src = READERS[cfg["reader"]](tmp=tmp, **cfg.get("args", {}))
     gm = GeneMap(src.genes, src.ensembl, vocab, label=a.context)
     tl = TargetLabels(vocab, gm, src.genes)
-    # TSS-group readers (DLD1) keep their group names; their gene symbols go through the same rule below
     name_of = (lambda t: t) if hasattr(src, "target_symbol") else (lambda t: tl(t)[0])
-    cells_of = {}                                         # raw label -> perturbed cells seen
+    cells_of = {}
     min_umi = cfg.get("min_umi", MIN_UMI)
     qc = dict(ctrl_seen=0, ctrl_low_umi=0, pert_seen=0, pert_low_umi=0, pert_unlabelled=0)
 
