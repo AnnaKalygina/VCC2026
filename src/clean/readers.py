@@ -290,7 +290,7 @@ class ScPerturb:
         S.validate_counts(x, self.matrix_field)
         self.X = sp.csr_matrix(x)
         self.genes, _ = S.select_symbols(a)
-        self.ensembl = None
+        self.ensembl = a.var["ensembl_id"].astype(str).to_numpy() if "ensembl_id" in a.var else None
         col = S.find_perturbations(a.obs)
         ctx, cinfo = S.map_contexts(study, a.obs, S.STUDIES[study][2])
         raw = a.obs[col].astype("string")
