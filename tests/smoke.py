@@ -125,6 +125,12 @@ for k in ('mean_cpm', 'lfc', 'nlog10p', 'se_cpm', 'lfc_batchmatched', 'half_delt
           'half_delta_bm_A', 'reliability_r_batchmatched'):
     np.testing.assert_allclose(rg[k], rb[k], rtol=1e-5, atol=1e-6, err_msg=k)
 
+# Gene axis: an HGNC previous symbol fills its panel gene, an alias is only reported, and a rescue never takes a
+# panel gene that an exact symbol already measures (AUDIT N9).
+from genes import GeneMap
+gm_h = GeneMap(np.array(['ATP5A1', 'DWORF', 'TSPAN6', 'FAM206A', 'ABITRAM']))
+assert gm_h.report['hgnc'] == 1 and ['ATP5A1', 'ATP5F1A', 'previous'] in gm_h.report['hgnc_renamed']
+assert ['DWORF', 'STRIT1'] in gm_h.report['hgnc_alias_not_applied'] and gm_h.report['rescue_shadowed'] == 1
 # One target-label rule for every reader (AUDIT S10).
 from labels import TargetLabels
 from types import SimpleNamespace
