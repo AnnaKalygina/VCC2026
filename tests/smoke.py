@@ -204,6 +204,6 @@ parts = [GroupMoments(np.array(['T0', 'non-targeting']), np.array([2., 3.]), np.
 merged = merge_moments(parts, ['T0', 'T1', 'non-targeting'])
 assert merged.counts.tolist() == [2., 8., 3.]
 contexts = yaml.safe_load((ROOT / 'workflow/config.yaml').read_text())['contexts']
-assert len(contexts) == 21 and all(c['reader'] in READERS for c in contexts.values())
+assert len(contexts) == 56 and all(c['reader'] in READERS for c in contexts.values())
 assert all('batch_key' in vars(r) for r in READERS.values()), 'every reader states its batch key (or None)'
 print(f'PASS: small synthetic statistics, encoder, prediction, cache, H1, and aggregation checks ({time.monotonic()-start:.1f}s)')

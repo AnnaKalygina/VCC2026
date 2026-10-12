@@ -279,6 +279,7 @@ class ScPerturb:
     Single-gene perturbations only. Sunshine 2023 (Calu-3, hCRISPRi-v2 guides with direct capture although obs says
     CRISPR-cas9) is a high-MOI screen: `perturbation` names the genes of all a cell's guides, so perturbed = one gene
     (any number of its guides), controls = 'control' (only non-targeting guides); batches = gem groups."""
+    batch_key = None                                   # Sunshine sets its gem groups per instance
 
     def __init__(self, study, context, tmp):
         sys.path.insert(0, str(ROOT / "scripts"))
